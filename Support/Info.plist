@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.robertmeta.capture-it</string>
+<key>CFBundleName</key><string>capture-it</string>
+<key>NSMicrophoneUsageDescription</key><string>Record your selected microphone alongside the selected application's audio.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Record audio from the application you select.</string>
+</dict></plist>

@@ -1,0 +1,61 @@
+.DS_Store
+*.log
+*.tmp
+tmp/
+temp/
+.dev/
+dist/
+
+# Local environment
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Index and AI tool caches
+.codanna/
+.serena/
+graphify-out/
+
+# Build products and private audio sessions
+.build/
+.swiftpm/
+recordings/
+*.wav
+*.caf
+*.aif
+*.aiff
+*.m4a
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.mp4
+*.mov
+*.mlmodelc/
+*.mlpackage/
+session.json
+transcript.txt
+transcript.jsonl
+transcript.json
+
+# Entire default sessions and hook runs, including arbitrary derived artifacts.
+/*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*/
+**/hooks/????????-????-????-????-????????????/
+diarization.json
+diarization.rttm
+speaker-transcript.txt
+speaker-transcript.jsonl
+
+# Local signing keys and credentials.
+*.pem
+*.key
+*.p12
+*.pfx

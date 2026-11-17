@@ -1,0 +1,15 @@
+{
+  "repository": "FluidInference/speaker-diarization-coreml",
+  "revision": "7eab74f3463c736418d0eb10296261ae581146c9",
+  "paths": [
+    "Segmentation.mlmodelc/",
+    "FBank.mlmodelc/",
+    "Embedding.mlmodelc/",
+    "PldaRho.mlmodelc/",
+    "plda-parameters.json",
+    "LICENSE",
+    "NOTICE.md",
+    "PROVENANCE.md",
+    "provenance.json"
+  ]
+}
