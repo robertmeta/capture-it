@@ -12,15 +12,17 @@ Built for people working in Claude Code, Codex, agy, Gemini CLI, OpenCode,
 Aider and the rest of the terminal. The output is ordinary audio, text and JSON;
 your assistant can use the files without a special integration.
 
-## Quick start
+## Quick setup and usage
 
 Requires **macOS 26+**, a compatible Mac for Apple's SpeechTranscriber, and
 Xcode or Command Line Tools with the macOS 26+ SDK and Swift 6. The core CLI
 has no external package dependencies. `doctor` checks local speech readiness.
 
-From the repository directory:
+Clone and build:
 
 ```sh
+git clone https://github.com/robertmeta/capture-it.git
+cd capture-it
 make build
 export PATH="$PWD/.build/release:$PATH"
 capture-it doctor
@@ -40,8 +42,20 @@ capture-it teams
 
 That creates `./teams-yyyyMMdd-HHmmss/` in your current directory. The WAV grows
 while you record; finalized words appear on screen and in `transcript.txt`.
-English (`en-US`) is the default. You can also run
-`.build/release/capture-it teams` directly without changing `PATH`.
+**Press Ctrl-C to stop and save.** The WAV finishes first, then pending
+transcription. Press Ctrl-C again to skip the remaining transcription wait.
+
+English (`en-US`) is the default. The `PATH` change above lasts for this shell.
+For a stable command available in future terminals, install the signed binary
+in a directory on your `PATH`, for example:
+
+```sh
+mkdir -p ~/.local/bin
+install -m 755 .build/release/capture-it ~/.local/bin/capture-it
+```
+
+Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` if needed. You can also
+run `.build/release/capture-it teams` directly from the repository.
 
 On first capture, allow macOS **Microphone** and **Screen & System Audio
 Recording** access. Check System Settings → Privacy & Security if access was
