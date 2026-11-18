@@ -18,13 +18,13 @@ Requires **macOS 26+**, a compatible Mac for Apple's SpeechTranscriber, and
 Xcode or Command Line Tools with the macOS 26+ SDK and Swift 6. The core CLI
 has no external package dependencies. `doctor` checks local speech readiness.
 
-Clone and build:
+Clone and install:
 
 ```sh
 git clone https://github.com/robertmeta/capture-it.git
 cd capture-it
-make build
-export PATH="$PWD/.build/release:$PATH"
+make install
+export PATH="$HOME/bin:$PATH"
 capture-it doctor
 ```
 
@@ -45,17 +45,16 @@ while you record; finalized words appear on screen and in `transcript.txt`.
 **Press Ctrl-C to stop and save.** The WAV finishes first, then pending
 transcription. Press Ctrl-C again to skip the remaining transcription wait.
 
-English (`en-US`) is the default. The `PATH` change above lasts for this shell.
-For a stable command available in future terminals, install the signed binary
-in a directory on your `PATH`, for example:
+English (`en-US`) is the default. `make install` builds and signs the CLI, then
+installs it to `~/bin/capture-it`. Add `export PATH="$HOME/bin:$PATH"` to
+`~/.zshrc` if needed for future terminals. Choose another install directory with:
 
 ```sh
-mkdir -p ~/.local/bin
-install -m 755 .build/release/capture-it ~/.local/bin/capture-it
+make install BINDIR="$HOME/.local/bin"
 ```
 
-Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` if needed. You can also
-run `.build/release/capture-it teams` directly from the repository.
+You can also use `make build` and run `.build/release/capture-it teams` directly
+from the repository.
 
 On first capture, allow macOS **Microphone** and **Screen & System Audio
 Recording** access. Check System Settings → Privacy & Security if access was

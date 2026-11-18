@@ -1,7 +1,10 @@
-.PHONY: help build test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-hooks test-title build-fluid setup-fluid test-fluid audit-public
+.PHONY: help build install test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-hooks test-title build-fluid setup-fluid test-fluid audit-public
+
+BINDIR ?= $(HOME)/bin
 
 help:
 	@echo 'build          Build and ad-hoc sign the release CLI'
+	@echo 'install        Build and install to ~/bin (override BINDIR=...)'
 	@echo 'test           Run queue, WAV and transcript concurrency tests'
 	@echo 'lint           Compile with warnings treated as errors'
 	@echo 'test-journeys  Exercise CLI discovery and error handling'
@@ -20,6 +23,11 @@ help:
 build:
 	swift build -c release
 	codesign --force --sign - --identifier com.robertmeta.capture-it .build/release/capture-it
+
+install: build
+	mkdir -p "$(BINDIR)"
+	install -m 755 .build/release/capture-it "$(BINDIR)/capture-it"
+	@printf 'Installed %s\n' "$(BINDIR)/capture-it"
 
 test:
 	swift test
