@@ -14,7 +14,7 @@ public enum CLI {
       capture-it setup-accessibility           # request window-title permission
       capture-it record [NAME_OR_PATTERN | --app NAME_OR_PATTERN] [options]
       capture-it transcribe SESSION_DIRECTORY [--out DIRECTORY] [--locale en-US]
-      capture-it hooks SESSION_DIRECTORY --hook EXECUTABLE [--hook EXECUTABLE ...]
+      capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
 
     Record options:
       --app NAME_OR_PATTERN  Name/bundle substring or quoted * / ? wildcard
@@ -24,8 +24,9 @@ public enum CLI {
       --locale LOCALE        Default: en-US
       --duration SECONDS     Stop automatically; otherwise Ctrl-C stops and saves
       --no-transcribe        Record audio without speech recognition
+      --no-fluid             Skip automatic FluidAudio speaker labeling
       --hook EXECUTABLE      Run after saved files finalize (repeatable; no shell)
-      --hook-timeout SECONDS Per-hook time limit; default: 300
+      --hook-timeout SECONDS Per-hook limit; default: 900 with installed FluidAudio, else 300
       --title TITLE          Explicit meeting title; otherwise best-effort AX title
 
     Hook options also apply to transcribe and hooks. `hooks --transcript DIRECTORY`
@@ -36,7 +37,10 @@ public enum CLI {
     One mono downmix feeds a single live transcription stream.
     WAV, transcript file and stdout workers run independently with bounded queues.
     Status and errors go to stderr. Capture/speech never upload audio.
-    Explicit hooks run your code and may use remote agents; none run by default.
+    After make setup, the installed FluidAudio hook runs locally after saving.
+    First Ctrl-C saves WAV, finishes speech, then labels; Ctrl-C again skips/cancels.
+    FluidAudio runs before explicit hooks unless you place it explicitly yourself.
+    Explicit hooks run your code and may use remote agents.
     Exit: 0 complete, 1 recording/usage failure, 2 saved audio/partial transcript or output.
     """
 
@@ -77,9 +81,11 @@ public enum CLI {
                 struct Report: Encodable {
                     let available: Bool; let locale: String; let assets: String; let ready: Bool
                     let accessibilityTrusted: Bool
+                    let fluidHook: String?
                 }
                 try json(Report(available: speech.available, locale: speech.locale, assets: speech.assets,
-                                ready: speech.ready, accessibilityTrusted: MeetingObserver.isTrusted))
+                                ready: speech.ready, accessibilityTrusted: MeetingObserver.isTrusted,
+                                fluidHook: InstalledHooks.fluid()?.path))
             }
             else {
                 print("macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
@@ -87,9 +93,10 @@ public enum CLI {
                 print("On-device speech: \(speech.ready ? "ready" : speech.assets) (\(speech.locale))")
                 print("Automatic model downloads: disabled; run setup-speech to explicitly install assets")
                 print("Accessibility for window titles: \(MeetingObserver.isTrusted ? "ready" : "not granted; run setup-accessibility or use --title")")
+                print("FluidAudio: \(InstalledHooks.fluid().map { "installed at \($0.path); runs after saving (--no-fluid to skip)" } ?? "not installed; run make setup")")
             }
         case "record":
-            try args.validate(allowed: ["--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
+            try args.validate(allowed: ["--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
             let hooks = try args.hookOptions()
             if let title = args.values["--title"], MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
             guard args.values["--app"] == nil || args.positionals.isEmpty else { throw CaptureError.message("Use either a positional app name or --app, not both") }
@@ -103,11 +110,11 @@ public enum CLI {
             let output = args.values["--out"].map { URL(fileURLWithPath: $0) } ?? CaptureDefaults.output(query: app, appName: selected.name)
             return try await Sessions.record(RecordOptions(app: selected.bundleID, output: output, microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US", transcribe: !args.flags.contains("--no-transcribe"), duration: duration, processID: selected.pid, hooks: hooks, title: args.values["--title"]))
         case "transcribe":
-            try args.validate(allowed: ["--out", "--locale", "--hook", "--hook-timeout"], positionals: 1...1)
+            try args.validate(allowed: ["--out", "--locale", "--no-fluid", "--hook", "--hook-timeout"], positionals: 1...1)
             let hooks = try args.hookOptions()
             return try await Sessions.transcribe(session: URL(fileURLWithPath: args.positionals[0]), output: args.values["--out"].map { URL(fileURLWithPath: $0) }, locale: args.values["--locale"] ?? "en-US", hooks: hooks)
         case "hooks":
-            try args.validate(allowed: ["--hook", "--hook-timeout", "--transcript"], positionals: 1...1)
+            try args.validate(allowed: ["--hook", "--hook-timeout", "--transcript", "--no-fluid"], positionals: 1...1)
             let hooks = try args.hookOptions(required: true)
             let stop = StopSignal()
             stop.state.beginDraining()
@@ -139,7 +146,7 @@ private struct Arguments {
                     hooks.append(arguments[index]); index += 1; continue
                 }
                 guard values[value] == nil, !flags.contains(value) else { throw CaptureError.message("Repeated option \(value)") }
-                if value == "--json" || value == "--no-transcribe" { flags.insert(value) }
+                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" { flags.insert(value) }
                 else {
                     index += 1
                     guard index < arguments.count, !arguments[index].hasPrefix("--") else { throw CaptureError.message("Missing value for \(value)") }
@@ -156,12 +163,17 @@ private struct Arguments {
     }
 
     func hookOptions(required: Bool = false) throws -> HookOptions {
-        if required || values["--hook-timeout"] != nil {
-            guard !hooks.isEmpty else { throw CaptureError.message("Supply at least one --hook EXECUTABLE") }
+        var executables = hooks.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        let fluid = flags.contains("--no-fluid") ? nil : InstalledHooks.fluid()
+        if let fluid, !executables.contains(where: { $0.resolvingSymlinksInPath() == fluid.resolvingSymlinksInPath() }) {
+            executables.insert(fluid, at: 0)
         }
-        let raw = values["--hook-timeout"] ?? "300"
+        if required || values["--hook-timeout"] != nil {
+            guard !executables.isEmpty else { throw CaptureError.message("Install FluidAudio with make setup, or supply --hook EXECUTABLE") }
+        }
+        let raw = values["--hook-timeout"] ?? (fluid == nil ? "300" : "900")
         guard let timeout = Double(raw) else { throw CaptureError.message("--hook-timeout must be a positive finite number") }
-        let options = HookOptions(executables: hooks.map { URL(fileURLWithPath: $0).standardizedFileURL }, timeout: timeout)
+        let options = HookOptions(executables: executables, timeout: timeout)
         try options.validate()
         return options
     }

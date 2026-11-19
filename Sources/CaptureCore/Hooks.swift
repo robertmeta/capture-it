@@ -2,7 +2,7 @@ import AVFoundation
 import Darwin
 import Foundation
 
-/// Explicit executables to run after audio and transcript files have finalized.
+/// Selected executables to run after audio and transcript files have finalized.
 public struct HookOptions: Sendable {
     public var executables: [URL]
     public var timeout: Double
@@ -22,6 +22,15 @@ public struct HookOptions: Sendable {
                 throw CaptureError.message("Hook must be an executable file: \(executable.path)")
             }
         }
+    }
+}
+
+/// Setup opts into the first-party hook by installing it beside the CLI.
+enum InstalledHooks {
+    static func fluid(beside executable: URL? = Bundle.main.executableURL) -> URL? {
+        guard let executable else { return nil }
+        let hook = executable.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("capture-it-fluid")
+        return FileManager.default.fileExists(atPath: hook.path) ? hook : nil
     }
 }
 

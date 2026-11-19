@@ -1,10 +1,11 @@
-.PHONY: help build install test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-hooks test-title build-fluid setup-fluid test-fluid audit-public
+.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed audit-public
 
 BINDIR ?= $(HOME)/bin
 
 help:
 	@echo 'build          Build and ad-hoc sign the release CLI'
 	@echo 'install        Build and install to ~/bin (override BINDIR=...)'
+	@echo 'setup          Install CLI and FluidAudio hook/models; enables automatic labels'
 	@echo 'test           Run queue, WAV and transcript concurrency tests'
 	@echo 'lint           Compile with warnings treated as errors'
 	@echo 'test-journeys  Exercise CLI discovery and error handling'
@@ -15,8 +16,9 @@ help:
 	@echo 'test-shutdown   Check double Ctrl-C preserves WAV and partial transcript'
 	@echo 'test-hooks      Real capture + local hooks, failure, timeout and cancellation'
 	@echo 'test-title      Real selected-app Accessibility title, override and hook metadata'
-	@echo 'setup-fluid     Explicitly download/build optional FluidAudio hook and models'
+	@echo 'setup-fluid     Download/build/install FluidAudio hook and offline models'
 	@echo 'test-fluid      Real offline diarization through hooks (requires setup-fluid)'
+	@echo 'test-fluid-installed Verify automatic installed hook, offline inference and cancellation'
 	@echo 'audit-public    Offline tracked-file/history/ignore audit (requires Gitleaks)'
 	@echo 'verify         Build, tests, lint and CLI journeys'
 
@@ -28,6 +30,8 @@ install: build
 	mkdir -p "$(BINDIR)"
 	install -m 755 .build/release/capture-it "$(BINDIR)/capture-it"
 	@printf 'Installed %s\n' "$(BINDIR)/capture-it"
+
+setup: install setup-fluid
 
 test:
 	swift test
@@ -64,13 +68,29 @@ verify: test lint test-journeys
 # Optional hook setup: these targets explicitly fetch third-party code/models.
 build-fluid:
 	swift build --package-path hooks/fluid-audio -c release
+	codesign --force --sign - --identifier com.robertmeta.capture-it.fluid hooks/fluid-audio/.build/release/capture-it-fluid
 
 setup-fluid: build-fluid
 	python3 scripts/setup_fluid.py
 	./hooks/fluidaudio --check
+	mkdir -p "$(BINDIR)/.capture-it-fluid"
+	install -m 755 hooks/fluid-audio/.build/release/capture-it-fluid "$(BINDIR)/.capture-it-fluid/capture-it-fluid"
+	install -m 644 LICENSE "$(BINDIR)/.capture-it-fluid/LICENSE.capture-it"
+	install -m 644 hooks/fluid-audio/.build/checkouts/FluidAudio/LICENSE "$(BINDIR)/.capture-it-fluid/LICENSE.FluidAudio"
+	ditto hooks/fluid-audio/.build/checkouts/FluidAudio/ThirdPartyLicenses "$(BINDIR)/.capture-it-fluid/ThirdPartyLicenses"
+	@set -eu; for bundle in hooks/fluid-audio/.build/release/*.bundle; do \
+		[ -d "$$bundle" ] || continue; \
+		ditto "$$bundle" "$(BINDIR)/.capture-it-fluid/$$(basename "$$bundle")"; \
+	done
+	install -m 755 hooks/fluidaudio "$(BINDIR)/capture-it-fluid"
+	"$(BINDIR)/capture-it-fluid" --check
+	@echo 'FluidAudio installed. Record with capture-it teams; labels run after saving. Use --no-fluid to skip.'
 
 test-fluid: build
 	python3 scripts/fluid_journey.py .build/release/capture-it
+
+test-fluid-installed:
+	python3 scripts/fluid_journey.py "$(BINDIR)/capture-it" --installed
 
 audit-public:
 	python3 scripts/audit_public.py

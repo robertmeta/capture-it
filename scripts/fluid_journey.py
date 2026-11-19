@@ -4,14 +4,18 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import time
 import wave
+from fixtures import start_player
 
 binary = str(Path(sys.argv[1]).resolve())
-hook = Path("hooks/fluidaudio").resolve()
+installed = sys.argv[2:] == ["--installed"]
+assert not sys.argv[2:] or installed, "Usage: fluid_journey.py CLI [--installed]"
+hook = Path(binary).with_name("capture-it-fluid") if installed else Path("hooks/fluidaudio").resolve()
 root = Path(".build/fluid-journey").resolve() / str(time.time_ns())
 root.mkdir(parents=True)
 # This only verifies local assets; it cannot install or download anything.
@@ -72,13 +76,22 @@ def hashes():
 
 before = hashes()
 began = time.monotonic()
-result = subprocess.run([binary, "hooks", str(session), "--hook", str(hook), "--hook-timeout", "300"], capture_output=True, text=True, timeout=310)
+command = [binary, "hooks", str(session), "--hook-timeout", "300"]
+if not installed:
+    command += ["--hook", str(hook)]
+# Installed inference must also work when the OS denies network access.
+if installed:
+    status = json.loads(subprocess.check_output([binary, "doctor", "--json"], text=True))
+    assert Path(status["fluidHook"]).resolve() == hook.resolve()
+    command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)"] + command
+result = subprocess.run(command, capture_output=True, text=True, timeout=310)
 (root / "stderr.txt").write_text(result.stderr)
 assert result.returncode == 0, result.stderr
 assert result.stdout == "", "Hook output leaked into transcript stdout"
 assert hashes() == before, "Original recording or transcript was changed"
 report = json.loads(next(session.glob("hooks/*/result.json")).read_text())
 row = report["results"][0]
+assert len(report["results"]) == 1
 assert row["status"] == "complete", row
 output = Path(row["outputDirectory"])
 diarization = json.loads((output / "diarization.json").read_text())
@@ -107,3 +120,128 @@ assert derived[-1]["attribution"] == "mixed" and len(derived[-1]["speakers"]) >=
 assert not list(output.glob(".analysis-*.wav")), "Temporary analysis audio was not removed"
 assert (output / "diarization.rttm").read_text().startswith("SPEAKER recording")
 print(f"passed: actual offline FluidAudio through hooks in {time.monotonic() - began:.2f}s; repeated synthetic voices retain distinct labels across app/mic lanes; mixed phrases, title, private output and original hashes verified: {output}")
+
+if installed:
+    def latest_report(folder=session):
+        path = max(folder.glob("hooks/*/result.json"), key=lambda p: p.stat().st_mtime_ns)
+        return json.loads(path.read_text())["results"]
+
+    # Explicit selection of the installed helper keeps its place without duplication.
+    check = subprocess.run([binary, "hooks", str(session), "--hook", str(hook)], capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0 and check.stdout == "", check.stderr
+    assert len(latest_report()) == 1 and hashes() == before
+
+    check = subprocess.run([binary, "hooks", str(session), "--no-fluid"], capture_output=True, text=True, timeout=10)
+    assert check.returncode == 1 and "supply --hook" in check.stderr
+    inspector = Path("examples/hooks/inspect-session.py").resolve()
+    check = subprocess.run([binary, "hooks", str(session), "--no-fluid", "--hook", str(inspector)], capture_output=True, text=True, timeout=10)
+    assert check.returncode == 0 and check.stdout == "", check.stderr
+    assert [p["executable"] for p in latest_report()] == [str(inspector)]
+
+    # Run a later hook only after labeled artifacts are durable.
+    check = subprocess.run([binary, "hooks", str(session), "--hook", str(inspector)], capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0 and check.stdout == "", check.stderr
+    rows = latest_report()
+    assert [r["executable"] for r in rows] == [str(hook), str(inspector)]
+    assert all(r["status"] == "complete" for r in rows)
+    assert (Path(rows[0]["outputDirectory"]) / "speaker-transcript.txt").is_file()
+
+    audio_only = root / "audio-only session"
+    audio_only.mkdir(mode=0o700)
+    shutil.copyfile(session / "recording.wav", audio_only / "recording.wav")
+    manifest["transcription"] = "disabled"
+    (audio_only / "session.json").write_text(json.dumps(manifest))
+    check = subprocess.run([binary, "hooks", str(audio_only)], capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0 and check.stdout == "", check.stderr
+    only_output = Path(latest_report(audio_only)[0]["outputDirectory"])
+    assert (only_output / "diarization.json").is_file()
+    assert not list(only_output.glob("speaker-transcript.*"))
+
+    # Missing models fail without downloads and do not damage original artifacts.
+    missing = dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(root / "missing models"))
+    check = subprocess.run([binary, "hooks", str(session)], env=missing, capture_output=True, text=True, timeout=15)
+    assert check.returncode == 2 and not (root / "missing models").exists()
+    failed = latest_report()[0]
+    assert failed["status"] == "failed"
+    assert "models are missing" in (Path(failed["outputDirectory"]) / "stderr.log").read_text()
+    assert hashes() == before
+
+    # Corrupt a copied manifest, with links to public model assets; never edit the cache.
+    model_directory = Path(os.environ.get("CAPTURE_IT_FLUID_MODELS", Path.home() / "Library/Application Support/capture-it/fluid-models"))
+    corrupted = root / "corrupted models"
+    corrupted.mkdir()
+    model_manifest = json.loads((model_directory / "setup.json").read_text())
+    for item in model_manifest["files"]:
+        link = corrupted / item["path"]
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to((model_directory / item["path"]).resolve())
+    model_manifest["files"][0]["sha256"] = "0" * 64
+    (corrupted / "setup.json").write_text(json.dumps(model_manifest))
+    check = subprocess.run([str(hook), "--check"], env=dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(corrupted)), capture_output=True, text=True, timeout=15)
+    assert check.returncode == 1 and "integrity check failed" in check.stderr and "No download attempted" in check.stderr
+
+    # A tiny processing timeout must retain the recording and transcript.
+    check = subprocess.run([binary, "hooks", str(session), "--hook-timeout", "0.001"], capture_output=True, text=True, timeout=10)
+    assert check.returncode == 2 and latest_report()[0]["status"] == "timed-out"
+    assert hashes() == before
+
+    # Standalone hooks is already draining; its first Ctrl-C cancels analysis.
+    previous = set(session.glob("hooks/*"))
+    with (root / "cancel-stderr.txt").open("w") as errors:
+        child = subprocess.Popen([binary, "hooks", str(session), "--hook", str(inspector)], stdout=subprocess.PIPE, stderr=errors)
+        try:
+            deadline = time.monotonic() + 15
+            while True:
+                fresh = set(session.glob("hooks/*")) - previous
+                if any(list(folder.glob("*/.analysis-*.wav")) for folder in fresh):
+                    break
+                assert child.poll() is None and time.monotonic() < deadline, "Hook did not start analysis"
+                time.sleep(0.01)
+            child.send_signal(signal.SIGINT)
+            stdout, _ = child.communicate(timeout=5)
+            assert child.returncode == 2 and stdout == b""
+        finally:
+            if child.poll() is None:
+                child.kill(); child.wait()
+    assert [r["status"] for r in latest_report()] == ["interrupted", "skipped"]
+    assert hashes() == before
+    print("passed: installed automatic helper with network denied; explicit dedup/order, --no-fluid, audio-only, missing/corrupt models, timeout and real analysis cancellation; original hashes preserved")
+
+    # Capture a real controlled app stream and local mic, then stop with Ctrl-C.
+    player = start_player(root, "FluidCapture", str(root / "voice-0.wav"), binary)
+    child = None
+    captured = root / "captured session"
+    try:
+        with (root / "capture-stderr.txt").open("w") as errors:
+            child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.fluidcapture", "--out", str(captured)], stdout=subprocess.DEVNULL, stderr=errors)
+            deadline = time.monotonic() + 45
+            while True:
+                text = captured / "transcript.txt"
+                if text.exists() and text.stat().st_size > 0:
+                    assert json.loads((captured / "session.json").read_text())["recording"] == "recording"
+                    assert not list(captured.glob("hooks/*")), "Analysis ran before recording ended"
+                    break
+                assert child.poll() is None and time.monotonic() < deadline, "No live speech during controlled capture"
+                time.sleep(0.01)
+            child.send_signal(signal.SIGINT)
+            child.wait(timeout=30)
+        assert child.returncode == 0, (root / "capture-stderr.txt").read_text()
+        saved = json.loads((captured / "session.json").read_text())
+        assert saved["recording"] == "complete" and saved["transcription"] == "complete"
+        assert saved["chunks"][0]["closed"]
+        assert json.loads((captured / "transcript.json").read_text())["complete"]
+        rows = latest_report(captured)
+        assert len(rows) == 1 and rows[0]["status"] == "complete"
+        labeled = Path(rows[0]["outputDirectory"]) / "speaker-transcript.txt"
+        assert labeled.is_file() and labeled.stat().st_size > 0
+        event_path = Path(rows[0]["outputDirectory"]).parent / "input.json"
+        event = json.loads(event_path.read_text())
+        assert event["recordingStatus"] == "complete" and event["transcriptComplete"]
+        print("passed: actual app+mic capture prints live speech; first Ctrl-C saves WAV and final text before automatic FluidAudio writes a labeled copy")
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill(); child.wait()
+        try:
+            os.kill(player, signal.SIGTERM)
+        except ProcessLookupError:
+            pass

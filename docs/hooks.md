@@ -5,8 +5,9 @@ speaker turns and conservative labels after recording. Its code/model setup is
 optional and explicit; it uses the same executable contract described below.
 
 Hooks let a terminal program process the saved WAV, or the WAV and transcript.
-They are explicit executable files: no discovery, global installation, shell
-command evaluation or agent invocation happens automatically.
+Your hooks are explicit executable files. After `make setup`, the first-party
+`capture-it-fluid` installed beside the CLI is selected automatically; use
+`--no-fluid` to skip it. Arbitrary plugins and agents are never discovered.
 
 ```sh
 capture-it teams --hook ./examples/hooks/inspect-session.py
@@ -23,13 +24,16 @@ capture-it hooks ./teams-20261117-143000 --transcript ./retry-text --hook ./my-n
 Each `--hook` names an executable file, such as a script with a shebang.
 Relative paths resolve in the directory where you start capture-it. Arguments
 and shell fragments are not accepted in that value; put them inside your script.
-No hook is enabled unless you supply the flag. `--hook-timeout` defaults to 300
-seconds per executable. The examples need Python 3, which the core CLI does not.
+`--hook-timeout` defaults to 900 seconds per executable with the installed
+FluidAudio helper selected, otherwise 300. The examples need Python 3, which
+the core CLI does not. FluidAudio runs first unless explicitly included at a
+chosen position in your hook list; it is then selected only once. `--no-fluid`
+disables automatic selection while retaining explicit hooks.
 
 ## Handoff
 
 Capture closes the WAV and finishes its transcription attempt before hooks run.
-Hooks run sequentially in flag order, in their own processes. Neither the agent
+Hooks run sequentially in the selected order, in their own processes. Neither the agent
 nor its output participates in the recording worker queues.
 
 Your executable receives one argument: an absolute path to `input.json`:

@@ -103,13 +103,16 @@ that the latest file or native resource has finalized; persistent files expose
 the last checkpoint rather than claiming success.
 
 Explicit `--hook` executables run after audio closure and the transcription
-attempt. A versioned JSON handoff includes absolute WAV and optional text paths.
+attempt. Optional `make setup` installs FluidAudio beside the CLI and enables
+automatic first-party labeling in that same hook path; `--no-fluid` skips it.
+A versioned JSON handoff includes absolute WAV and optional text paths.
 Each hook has a private output/log directory, process group and timeout. Hook
 stdout never participates in the transcript tee; failures preserve capture and
 continue the chain, while interruption cancels the group and skips remaining
 hooks. The standalone `hooks` command can retry on saved artifacts. See
 [hook contract](hooks.md) and [decision](adr/0007-explicit-post-session-hooks.md).
 Provider-specific behavior and speaker enrichment stay outside the core.
+See [installed FluidAudio selection](adr/0010-installed-fluid-hook.md).
 
 A separate serial Accessibility worker reads only the selected PID's window
 titles, bounded to eight windows and 150 ms per message. It updates an optional

@@ -1,7 +1,8 @@
 # FluidAudio: offline speaker-labeling hook
 
-**Experimental:** adapter and model-free checks are present; the external
-package build and actual model inference have not yet been verified.
+The optional adapter builds separately from the dependency-free core CLI.
+Model-free checks and a real offline multi-voice journey cover its integration;
+speaker accuracy still depends on the recording.
 
 This optional hook uses FluidAudio's offline Community-1/VBx pipeline on the
 saved WAV. It adds anonymous speaker intervals and a derived transcript copy;
@@ -17,8 +18,10 @@ from GitHub and selected model assets from
 It does not send audio or transcripts.
 
 ```sh
+make setup                      # install core CLI, helper and models
+# Or add FluidAudio to an existing CLI installation:
 make setup-fluid
-./hooks/fluidaudio --check
+~/bin/capture-it-fluid --check
 ```
 
 Code is pinned to FluidAudio 0.18.3 with only its Diarizer trait enabled; TTS and
@@ -33,6 +36,12 @@ location. An existing matching setup is checked rather than downloaded again.
 Incomplete, mismatched or corrupted setups fail explicitly; choose a fresh
 directory to reinstall. No cached asset directory is silently deleted/replaced.
 
+Both tools install to `~/bin` by default; `BINDIR` overrides the destination.
+The helper launcher and `.capture-it-fluid/` runtime directory stay together.
+The runtime contains the signed executable and required Swift resource bundles,
+plus code license notices, so it works outside the checkout. Keep `CAPTURE_IT_FLUID_MODELS` set at runtime
+if you chose a custom model location.
+
 The hook verifies the local asset manifest and loads Core ML models directly.
 It does not call FluidAudio's download/fallback APIs. Missing assets fail with
 setup instructions while the original audio remains available. `make verify`
@@ -41,17 +50,34 @@ does not fetch FluidAudio or models.
 ## Capture or retry
 
 ```sh
-capture-it teams --hook ./hooks/fluidaudio --hook-timeout 900
+capture-it teams
+capture-it teams --no-fluid       # skip automatic labels for this recording
 
 # Process an existing session.
-capture-it hooks ./teams-20261117-143000 --hook ./hooks/fluidaudio --hook-timeout 900
+capture-it hooks ./teams-20261117-143000
 
 # Use a retried transcript.
 capture-it hooks ./teams-20261117-143000 --transcript ./retry-text \
-  --hook ./hooks/fluidaudio --hook-timeout 900
+  --hook-timeout 900
+
+# Checkout CLI without an installed sibling helper:
+.build/release/capture-it teams --hook ./hooks/fluidaudio --hook-timeout 900
 ```
 
-Hooks run in the order supplied. A later notes hook can read the preceding
+After setup, the CLI discovers `capture-it-fluid` beside its own executable.
+It adds this first-party helper before your explicit hooks. An explicitly
+listed copy keeps your chosen order and is not added twice. `--no-fluid`
+disables automatic selection, including on `transcribe` and `hooks`; explicit
+hooks still run. With FluidAudio installed, the default timeout per hook is
+900 seconds; otherwise it is 300. Set `--hook-timeout` to override it.
+
+First Ctrl-C stops capture, saves the WAV, finishes speech and then runs hooks.
+An automatic stop follows the same path. Second Ctrl-C skips pending analysis
+or terminates a running hook; finalized audio and written text remain available.
+Live text is not held back for FluidAudio. The labeled transcript is a separate
+post-recording artifact, rather than a rewrite of text already printed.
+
+A later notes hook can read the preceding
 result and output directory from `result.json` beside its input JSON. Model
 loading and analysis happen after recording, outside the capture workers.
 
@@ -100,6 +126,7 @@ speaker turns, a later alignment stage would be needed.
 ```sh
 make verify       # core checks + model-free mix/attribution regressions
 make test-fluid   # requires explicit setup; real local model through public hooks
+make test-fluid-installed # installed auto-selection, network denied, failure/cancel paths
 ```
 
 The real-model journey uses locally synthesized alternating voices in app and

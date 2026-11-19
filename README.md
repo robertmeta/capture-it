@@ -65,10 +65,34 @@ ScreenCaptureKit requires a display; no video output is saved.
 Built-in capture and transcription run locally. `setup-speech` contacts Apple
 to download assets. Optional user-selected hooks may contact their own providers.
 
+### Set up automatic speaker labels
+
+From the checkout, run:
+
+```sh
+make setup
+capture-it doctor
+capture-it teams
+```
+
+`make setup` installs the CLI and FluidAudio helper in `~/bin`, with its runtime
+resources beside the helper, and downloads pinned models for offline use.
+It requires Swift 6.2+. Use `BINDIR` to change the install location for both tools.
+Apple speech assets are separate: use `setup-speech` above if needed.
+
+Once installed, FluidAudio runs automatically **after the WAV and live transcript
+finish saving**, including after the first Ctrl-C. It writes a separate
+speaker-labeled transcript; live text still appears without speaker labels.
+Ctrl-C again skips or cancels the remaining processing. To skip automatic labels:
+
+```sh
+capture-it teams --no-fluid
+```
+
 ## Stop and save
 
 - **Ctrl-C once:** stop capture, drain audio and finalize the WAV. Finish pending
-  transcription, flush text and run any explicitly selected hooks.
+  transcription, flush text, run installed FluidAudio, then your selected hooks.
 - **Ctrl-C again:** skip remaining speech processing, cancel a running hook and
   skip later hooks. Audio still finishes saving first; written text is retained.
 
@@ -196,25 +220,31 @@ See the [hook contract and agy/Claude/Codex examples](docs/hooks.md).
 Agent hooks use the executable, account and model provider you select; that
 provider may be remote or paid. Coding agents are not assumed to decode WAV files.
 
-### FluidAudio hook — experimental
+### FluidAudio speaker labeling
 
-The optional [FluidAudio adapter](docs/fluid-audio-hook.md) is implemented with
-model-free mix/attribution checks. **Its external package build and actual model
-inference have not yet been verified.** It is separate from the tested capture
-path and the normal build.
-
-Its explicit setup downloads pinned code and model assets. For contributors
-validating this integration:
+The optional [FluidAudio adapter](docs/fluid-audio-hook.md) runs offline after
+recording. `make install` installs the core CLI; `make setup` also installs
+FluidAudio and its models. You can add just the helper to an existing installation:
 
 ```sh
 make setup-fluid
 make test-fluid
 
-# After successful setup and validation:
-capture-it teams --hook ./hooks/fluidaudio --hook-timeout 900
+# Installed CLI: automatic speaker labels after saving.
+capture-it teams
+capture-it hooks ./teams-20261117-143000
+
+# Checkout CLI without a sibling helper:
+.build/release/capture-it teams --hook ./hooks/fluidaudio --hook-timeout 900
 ```
 
-The intended outputs are anonymous speaker turns and a derived labeled transcript.
+Outputs are anonymous speaker turns and a derived labeled transcript under
+`SESSION/hooks/UUID/001/`. The default per-hook timeout is 900 seconds when the
+installed helper is selected, or 300 seconds otherwise; override with
+`--hook-timeout`. FluidAudio runs before your other hooks, unless you explicitly
+include it in your chosen hook order. `--no-fluid` disables automatic selection;
+an explicit `--hook` still runs.
+
 Mixed phrases remain mixed; this does not infer people's names or provide word
 alignment. See the [setup and artifact details](docs/fluid-audio-hook.md).
 
