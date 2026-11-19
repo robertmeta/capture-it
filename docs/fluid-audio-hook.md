@@ -71,7 +71,8 @@ disables automatic selection, including on `transcribe` and `hooks`; explicit
 hooks still run. With FluidAudio installed, the default timeout per hook is
 900 seconds; otherwise it is 300. Set `--hook-timeout` to override it.
 
-First Ctrl-C stops capture, saves the WAV, finishes speech and then runs hooks.
+First Ctrl-C, or `q` in an interactive recording, stops capture, saves the WAV,
+finishes speech and then runs hooks. Repeated `q` never interrupts analysis.
 An automatic stop follows the same path. Second Ctrl-C skips pending analysis
 or terminates a running hook; finalized audio and written text remain available.
 Live text is not held back for FluidAudio. The labeled transcript is a separate

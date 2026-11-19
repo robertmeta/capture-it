@@ -22,7 +22,7 @@ public enum CLI {
       --out DIRECTORY        Default: ./SEARCH-yyyyMMdd-HHmmss (new session folder)
       --mic DEVICE_UID       Override app input detection / system-default fallback
       --locale LOCALE        Default: en-US
-      --duration SECONDS     Stop automatically; otherwise Ctrl-C stops and saves
+      --duration SECONDS     Stop automatically; otherwise q or Ctrl-C stops and saves
       --no-transcribe        Record audio without speech recognition
       --no-fluid             Skip automatic FluidAudio speaker labeling
       --hook EXECUTABLE      Run after saved files finalize (repeatable; no shell)
@@ -39,6 +39,8 @@ public enum CLI {
     Status and errors go to stderr. Capture/speech never upload audio.
     After make setup, the installed FluidAudio hook runs locally after saving.
     First Ctrl-C saves WAV, finishes speech, then labels; Ctrl-C again skips/cancels.
+    In an interactive recording, q (no Enter) starts the same graceful stop.
+    Repeated q never cancels finishing work. Escape has no stop action.
     FluidAudio runs before explicit hooks unless you place it explicitly yourself.
     Explicit hooks run your code and may use remote agents.
     Exit: 0 complete, 1 recording/usage failure, 2 saved audio/partial transcript or output.

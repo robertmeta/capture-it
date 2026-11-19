@@ -27,6 +27,17 @@ final class ShutdownTests: XCTestCase {
         XCTAssertTrue(automatic.interrupted)
     }
 
+    func testRepeatedGracefulKeyDoesNotEscalateAndSignalsStillCan() {
+        let state = ShutdownState()
+        for _ in 0 ..< 10 { state.beginDraining() }
+        XCTAssertTrue(state.requested)
+        XCTAssertFalse(state.interrupted)
+        state.request()
+        XCTAssertTrue(state.interrupted)
+        state.beginDraining()
+        XCTAssertTrue(state.interrupted)
+    }
+
     func testInterruptWhileStdoutIsBlockedRetainsTextAndIncompleteSummary() throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("capture-it-shutdown-\(UUID())")
         try privateDirectory(path)

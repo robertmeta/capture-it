@@ -114,6 +114,11 @@ hooks. The standalone `hooks` command can retry on saved artifacts. See
 Provider-specific behavior and speaker enrichment stay outside the core.
 See [installed FluidAudio selection](adr/0010-installed-fluid-hook.md).
 
+A foreground terminal observer reads `q` without Enter on a separate nonblocking
+control queue. It requests the idempotent drain state, while signal handlers
+retain escalation. Terminal settings restore synchronously before the CLI exits;
+piped stdin stays untouched. See [graceful quit key](adr/0011-graceful-quit-key.md).
+
 A separate serial Accessibility worker reads only the selected PID's window
 titles, bounded to eight windows and 150 ms per message. It updates an optional
 meeting snapshot every two seconds without waiting on audio workers or during

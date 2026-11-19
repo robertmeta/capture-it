@@ -114,6 +114,8 @@ Later hooks can read `result.json` beside their input JSON to find earlier
 hooks' statuses and output directories. The input artifact paths stay unchanged.
 
 First Ctrl-C during recording saves audio and finishes text, then runs the hooks.
+In a foreground interactive recording, `q` starts the same graceful stop without
+Enter. Repeated `q` never cancels transcription or hooks; Escape does nothing.
 Another Ctrl-C skips or cancels hooks. During automatic shutdown, or the standalone
 `hooks` command, Ctrl-C cancels remaining work immediately. Audio closure still
 takes priority. Hook output stays in its logs; transcript stdout remains clean.

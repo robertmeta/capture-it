@@ -1,4 +1,4 @@
-.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed audit-public
+.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-keys test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed audit-public
 
 BINDIR ?= $(HOME)/bin
 
@@ -14,6 +14,7 @@ help:
 	@echo 'test-selection Verify real app wildcard/interactive selection and WAV'
 	@echo 'test-microphone Check real active app mic inference and explicit override'
 	@echo 'test-shutdown   Check double Ctrl-C preserves WAV and partial transcript'
+	@echo 'test-keys       Real terminal q, repeated q, Ctrl-C, Escape and restoration'
 	@echo 'test-hooks      Real capture + local hooks, failure, timeout and cancellation'
 	@echo 'test-title      Real selected-app Accessibility title, override and hook metadata'
 	@echo 'setup-fluid     Download/build/install FluidAudio hook and offline models'
@@ -50,6 +51,9 @@ test-speech: build
 
 test-shutdown: build
 	python3 scripts/shutdown_journey.py .build/release/capture-it
+
+test-keys: build
+	python3 scripts/quit_key_journey.py .build/release/capture-it
 
 test-selection: build
 	python3 scripts/selection_journey.py .build/release/capture-it

@@ -42,8 +42,9 @@ capture-it teams
 
 That creates `./teams-yyyyMMdd-HHmmss/` in your current directory. The WAV grows
 while you record; finalized words appear on screen and in `transcript.txt`.
-**Press Ctrl-C to stop and save.** The WAV finishes first, then pending
-transcription. Press Ctrl-C again to skip the remaining transcription wait.
+**Press `q` or Ctrl-C to stop and save.** In an interactive recording, `q` works
+without Enter. The WAV finishes first, then pending transcription and hooks.
+More `q` presses keep waiting; Ctrl-C during shutdown cancels remaining work.
 
 English (`en-US`) is the default. `make install` builds and signs the CLI, then
 installs it to `~/bin/capture-it`. Add `export PATH="$HOME/bin:$PATH"` to
@@ -91,6 +92,8 @@ capture-it teams --no-fluid
 
 ## Stop and save
 
+- **q:** in a foreground interactive terminal, start a graceful stop without
+  Enter. Further `q` presses never skip transcription or cancel hooks.
 - **Ctrl-C once:** stop capture, drain audio and finalize the WAV. Finish pending
   transcription, flush text, run installed FluidAudio, then your selected hooks.
 - **Ctrl-C again:** skip remaining speech processing, cancel a running hook and
@@ -99,6 +102,9 @@ capture-it teams --no-fluid
 The CLI announces when the WAV is saved. Speech finalization has no fixed cutoff;
 you can interrupt again to stop waiting. After an automatic stop, Ctrl-C also
 cancels remaining processing. SIGTERM follows the same shutdown path.
+Escape has no stop action. Keyboard input is enabled after app selection and
+capture startup, stays active through finalization, and restores your terminal
+settings on exit. Piped stdin is left unread; use signals in scripts.
 
 ## Choose the app and microphone
 
@@ -279,6 +285,7 @@ make verify          # unit tests, warnings-as-errors and public CLI checks
 make test-native     # real app isolation, mic, WAV and failure paths
 make test-speech     # real local speech, tee and graceful shutdown
 make test-shutdown   # second Ctrl-C during drain
+make test-keys       # real terminal q/repeated q, Ctrl-C and terminal restoration
 make test-selection  # app search and interactive picker
 make test-microphone # active-input probe and safe fallback
 make test-hooks      # hook handoff, failures, timeout and process cleanup

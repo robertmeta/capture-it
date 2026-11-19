@@ -51,6 +51,8 @@ public enum Sessions {
     public static func record(_ options: RecordOptions) async throws -> Int32 {
         try options.hooks.validate()
         let stop = StopSignal()
+        var keys: RecordingKeys?
+        defer { keys?.stop() }
         let resolved = try Hardware.resolveApp(options.app, processID: options.processID)
         if let title = options.title, MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
         let selectedPID = options.processID ?? resolved.first(where: { $0.bundleID == options.app })?.pid
@@ -110,8 +112,9 @@ public enum Sessions {
             try await app.start()
             manifest.recording = "recording"
             try atomicJSON(manifest, at: manifestURL)
+            keys = RecordingKeys(shutdown: stop.state)
             diagnostic("Recording \(options.app) + \(microphone.name) → \(options.output.path)")
-            diagnostic("Transcription: \(manifest.transcription). Ctrl-C saves audio and finishes transcription; again skips transcription.")
+            diagnostic("Transcription: \(manifest.transcription). \(keys == nil ? "Ctrl-C" : "q or Ctrl-C") saves audio and finishes transcription/hooks; Ctrl-C again cancels remaining processing.")
             if let title = meeting.snapshot.title { diagnostic("Title (\(meeting.snapshot.source ?? "unknown")): \(title)") }
             else if meeting.snapshot.status == "permission-required" { diagnostic("Meeting title unavailable: allow Accessibility with setup-accessibility, or supply --title") }
             let began = Date()
