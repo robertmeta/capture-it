@@ -63,6 +63,7 @@ public enum Sessions {
         try privateDirectory(options.output)
         let issues = Issues()
         var manifest = Manifest(app: options.app, microphone: microphone.uid, locale: options.locale)
+        if !options.transcribe { manifest.transcription = "disabled" }
         manifest.channelLayout = RecordingFormat.channels
         manifest.selectedProcessID = options.processID
         manifest.microphoneSelection = micSelection.source
@@ -85,6 +86,10 @@ public enum Sessions {
             await authorizeAndReport(microphone: microphone)
             try await MicrophoneAccess.authorize()
             if stop.state.requested { throw CaptureError.message("Stopped before recording began") }
+            let app = try NativeCapture(bundle: options.app, microphone: microphone, lane: inputs[0], micLane: inputs[1], processID: options.processID)
+            diagnostic("Starting selected-app audio capture; allow macOS Screen & System Audio Recording access if prompted")
+            let filter = try await app.prepare()
+            if stop.state.requested { throw CaptureError.message("Stopped before recording began") }
             if options.transcribe {
                 let status = await LocalSpeech.status(locale: options.locale)
                 if status.ready {
@@ -101,13 +106,12 @@ public enum Sessions {
                     manifest.transcription = "unavailable"
                     issues.add("Local speech unavailable for \(options.locale): \(status.assets). Recording audio only; no model was downloaded.")
                 }
-            } else { manifest.transcription = "disabled" }
+            }
 
             for lane in lanes { lane.startWriter() }
             assembler.start()
-            let app = try NativeCapture(bundle: options.app, microphone: microphone, lane: inputs[0], micLane: inputs[1], processID: options.processID); appCapture = app
-            diagnostic("Starting selected-app audio capture; allow macOS Screen & System Audio Recording access if prompted")
-            try await app.start()
+            try await app.start(filter: filter)
+            appCapture = app
             manifest.recording = "recording"
             try atomicJSON(manifest, at: manifestURL)
             diagnostic("Recording \(options.app) + \(microphone.name) → \(options.output.path)")
@@ -146,28 +150,31 @@ public enum Sessions {
             }
         } catch {
             captureFailed = true
-            issues.add(String(describing: error)); diagnostic(String(describing: error))
+            let issue = String(describing: error)
+            issues.add(issue)
+            if warned.insert(issue).inserted { diagnostic(issue) }
         }
 
         // Stop producers before closing their SPSC queues. WAV closes independently
         // of model finalization, stdout and transcript file drains.
         stop.state.beginDraining()
-        diagnostic("Stopping capture and saving WAV…")
-        manifest.recording = "stopping"
-        manifest.issues = issues.all
-        manifest.chunks = lanes.flatMap(\.chunks)
-        try atomicJSON(manifest, at: manifestURL)
-        let stopped = Atomic<Int>(0)
-        let stoppingApp = appCapture
-        Task {
-            do { try await stoppingApp?.stop() }
-            catch { issues.add("App audio shutdown failed: \(error)") }
-            stopped.add(1, ordering: .releasing)
-        }
-        let stopDeadline = Date().addingTimeInterval(3)
-        while stopped.load(ordering: .acquiring) < 1, Date() < stopDeadline { try? await Task.sleep(for: .milliseconds(20)) }
-        if stopped.load(ordering: .acquiring) < 1 {
-            captureFailed = true; issues.add("Native audio shutdown timed out; audio files will be closed and the process will exit")
+        if let appCapture {
+            diagnostic("Stopping capture and saving WAV…")
+            manifest.recording = "stopping"
+            manifest.issues = issues.all
+            manifest.chunks = lanes.flatMap(\.chunks)
+            try atomicJSON(manifest, at: manifestURL)
+            let stopped = Atomic<Int>(0)
+            Task {
+                do { try await appCapture.stop() }
+                catch { issues.add("App audio shutdown failed: \(error)") }
+                stopped.add(1, ordering: .releasing)
+            }
+            let stopDeadline = Date().addingTimeInterval(3)
+            while stopped.load(ordering: .acquiring) < 1, Date() < stopDeadline { try? await Task.sleep(for: .milliseconds(20)) }
+            if stopped.load(ordering: .acquiring) < 1 {
+                captureFailed = true; issues.add("Native audio shutdown timed out; audio files will be closed and the process will exit")
+            }
         }
         assembler.finishInputs()
         if !assembler.wait() {
@@ -180,12 +187,16 @@ public enum Sessions {
             if lane.recordingOverflow.load(ordering: .acquiring) { captureFailed = true }
         }
         manifest.chunks = lanes.flatMap(\.chunks)
-        if manifest.chunks.isEmpty || manifest.chunks.contains(where: { !$0.closed }) {
-            captureFailed = true; issues.add("Recording did not produce complete audio tracks")
-        }
         manifest.inputFrames = Dictionary(uniqueKeysWithValues: inputs.map { ($0.source.rawValue, $0.receivedFrames.load(ordering: .acquiring)) })
-        for input in inputs where input.receivedFrames.load(ordering: .acquiring) == 0 {
-            captureFailed = true; issues.add("No \(input.source.rawValue) audio was received")
+        if appCapture != nil {
+            if manifest.chunks.isEmpty || manifest.chunks.contains(where: { !$0.closed }) {
+                captureFailed = true; issues.add("Recording did not produce complete audio tracks")
+            }
+            for input in inputs where input.receivedFrames.load(ordering: .acquiring) == 0 {
+                captureFailed = true; issues.add("No \(input.source.rawValue) audio was received")
+            }
+        } else if manifest.transcription == "starting" || manifest.transcription == "running" {
+            manifest.transcription = "incomplete"
         }
         manifest.recording = captureFailed ? "failed" : "complete"
         meeting.stop()
@@ -193,7 +204,7 @@ public enum Sessions {
         manifest.issues = issues.all
         try atomicJSON(manifest, at: manifestURL) // audio completion survives a speech shutdown failure
 
-        if tee != nil {
+        if tee != nil, appCapture != nil {
             let audioStatus = captureFailed ? "Audio shutdown finished with issues." : "WAV saved."
             diagnostic("\(audioStatus) Finishing transcription; Ctrl-C again to skip waiting.")
         }
@@ -212,15 +223,18 @@ public enum Sessions {
         }
         manifest.issues = issues.all
         try atomicJSON(manifest, at: manifestURL)
-        do {
-            if !(try await HookRunner.run(session: options.output, options: options.hooks, shutdown: stop.state)) {
-                issues.add("Post-session hooks did not all complete; see the session's hooks directory")
-            }
-        } catch { issues.add("Post-session hooks failed: \(error)") }
+        if appCapture != nil {
+            do {
+                if !(try await HookRunner.run(session: options.output, options: options.hooks, shutdown: stop.state)) {
+                    issues.add("Post-session hooks did not all complete; see the session's hooks directory")
+                }
+            } catch { issues.add("Post-session hooks failed: \(error)") }
+        }
         manifest.issues = issues.all
         try atomicJSON(manifest, at: manifestURL)
         for issue in manifest.issues where warned.insert(issue).inserted { diagnostic(issue) }
-        diagnostic("Saved \(options.output.path); audio \(manifest.recording), transcript \(manifest.transcription)")
+        if appCapture == nil { diagnostic("Recording did not start. Failure details saved to \(manifestURL.path)") }
+        else { diagnostic("Saved \(options.output.path); audio \(manifest.recording), transcript \(manifest.transcription)") }
         return captureFailed ? 1 : (manifest.issues.isEmpty ? 0 : 2)
     }
 

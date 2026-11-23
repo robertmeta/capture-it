@@ -73,17 +73,21 @@ public enum CLI {
         case "doctor":
             try args.validate(allowed: ["--json", "--locale"])
             let speech = await LocalSpeech.status(locale: args.values["--locale"] ?? "en-US")
+            let screenRecordingGranted = ScreenCaptureAccess.screenRecordingGranted
             if args.flags.contains("--json") {
                 struct Report: Encodable {
                     let available: Bool; let locale: String; let assets: String; let ready: Bool
                     let accessibilityTrusted: Bool
+                    let screenRecordingGranted: Bool
                 }
                 try json(Report(available: speech.available, locale: speech.locale, assets: speech.assets,
-                                ready: speech.ready, accessibilityTrusted: MeetingObserver.isTrusted))
+                                ready: speech.ready, accessibilityTrusted: MeetingObserver.isTrusted,
+                                screenRecordingGranted: screenRecordingGranted))
             }
             else {
                 print("macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
                 print("Microphone permission: \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
+                print("Screen Recording permission for this launch: \(screenRecordingGranted ? "granted" : "not granted")")
                 print("On-device speech: \(speech.ready ? "ready" : speech.assets) (\(speech.locale))")
                 print("Automatic model downloads: disabled; run setup-speech to explicitly install assets")
                 print("Accessibility for window titles: \(MeetingObserver.isTrusted ? "ready" : "not granted; run setup-accessibility or use --title")")
