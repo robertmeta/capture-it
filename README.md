@@ -15,8 +15,9 @@ your assistant can use the files without a special integration.
 ## Quick setup and usage
 
 Requires **macOS 26+**, a compatible Mac for Apple's SpeechTranscriber, and
-Xcode or Command Line Tools with the macOS 26+ SDK and Swift 6. The core CLI
-has no external package dependencies. `doctor` checks local speech readiness.
+an Apple toolchain with **Swift 6.2+** and the **macOS 26+ SDK**. Install
+Xcode 26 or newer, or the corresponding Command Line Tools. The core CLI has
+no external package dependencies. `doctor` checks local speech readiness.
 
 Clone and install:
 
@@ -56,6 +57,23 @@ make install BINDIR="$HOME/.local/bin"
 
 You can also use `make build` and run `.build/release/capture-it teams` directly
 from the repository.
+
+If `make build` reports an invalid Swift package manifest, check which toolchain
+and SDK are active.
+
+```sh
+xcode-select -p
+swift --version
+xcrun --sdk macosx --show-sdk-version
+```
+
+Update the Apple toolchain if either version is below the minimum above. If a
+compatible Xcode is already installed at `/Applications/Xcode.app`, select it
+for a single build.
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make build
+```
 
 On first capture, allow macOS **Microphone** and **Screen & System Audio
 Recording** access. Check System Settings → Privacy & Security if access was

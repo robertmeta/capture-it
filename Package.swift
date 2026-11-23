@@ -19,6 +19,5 @@ let package = Package(
         ),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
         .testTarget(name: "FluidHookSupportTests", dependencies: ["FluidHookSupport"], path: "hooks/fluid-audio/Tests/FluidHookSupportTests")
-    ],
-    swiftLanguageModes: [.v6]
+    ]
 )
