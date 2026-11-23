@@ -76,10 +76,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make build
 ```
 
 On first capture, allow macOS **Microphone** and **Screen & System Audio
-Recording** access. Check System Settings → Privacy & Security if access was
-denied. Keep the signed executable in a stable location; rebuilding or moving
-an ad-hoc-signed binary can require authorization again. Playback remains audible.
-ScreenCaptureKit requires a display; no video output is saved.
+Recording** access. If ScreenCaptureKit returns `-3801` after you clicked Allow,
+open **System Settings → Privacy & Security → Screen & System Audio Recording**.
+Enable the terminal or capture-it entry in the section that grants both screen
+and system audio access. Quit the terminal completely, reopen it, then run
+`capture-it doctor` and retry capture from the same installed path. Doctor
+checks the screen grant for its current launch without requesting permission.
+Rebuilding or moving an ad-hoc-signed binary can require authorization again.
+Playback remains audible. ScreenCaptureKit requires a display and saves audio only.
 
 Built-in capture and transcription run locally. `setup-speech` contacts Apple
 to download assets. Optional user-selected hooks may contact their own providers.

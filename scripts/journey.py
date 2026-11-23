@@ -24,6 +24,8 @@ assert all("bundleID" in row and "pid" in row for row in apps)
 assert all("uid" in row and "isDefault" in row for row in devices)
 status = json.loads(run("doctor", "--json").stdout)
 assert isinstance(status["ready"], bool) and status["locale"]
+assert isinstance(status["screenRecordingGranted"], bool)
+assert "Screen Recording permission for this launch:" in run("doctor").stdout
 with tempfile.TemporaryDirectory(prefix="capture-it-journey-") as directory:
     output = Path(directory) / "should-not-exist"
     result = run("record", "--app", "invalid.capture-it.not-running", "--out", str(output), expected=1)

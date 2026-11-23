@@ -80,6 +80,32 @@ try:
     print("passed: child file-size quota produces a persisted recording failure instead of hanging")
 
     status = json.loads(subprocess.check_output([binary, "doctor", "--json"], text=True))
+    denial_fixture = root / "ScreenCaptureDenialFixture.dylib"
+    subprocess.run(["xcrun", "clang", "-fobjc-arc", "-dynamiclib", "-framework", "Foundation",
+                    "-framework", "ScreenCaptureKit", "Support/ScreenCaptureDenialFixture.m",
+                    "-o", str(denial_fixture)], check=True)
+    for phase in ("enumerate", "start"):
+        denied = root / f"denied-{phase}-{time.time_ns()}"
+        env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(denial_fixture), CAPTURE_IT_DENIAL_PHASE=phase)
+        result = subprocess.run([binary, "record", "--app", "com.robertmeta.capture-it.fixture.selected",
+                                 "--out", str(denied), "--duration", "1", "--no-fluid", "--hook", "/usr/bin/true"],
+                                env=env, capture_output=True, text=True, timeout=20)
+        (root / f"{denied.name}-stderr.txt").write_text(result.stderr)
+        assert result.returncode == 1 and not result.stdout, result.stderr
+        assert result.stderr.count("-3801") == 1 and "quit and reopen the terminal" in result.stderr, result.stderr
+        assert "Recording did not start" in result.stderr and "Stopping capture" not in result.stderr, result.stderr
+        saved = json.loads((denied / "session.json").read_text())
+        assert saved["recording"] == "failed" and saved["transcription"] in ("incomplete", "unavailable"), saved
+        assert sum("-3801" in issue for issue in saved["issues"]) == 1, saved
+        assert saved["chunks"] == [] and saved["inputFrames"] == {"app": 0, "mic": 0}, saved
+        assert not (denied / "recording.wav").exists() and not (denied / "hooks").exists()
+        summary = denied / "transcript.json"
+        if phase == "enumerate":
+            assert not list(denied.glob("transcript*"))
+        elif summary.exists():
+            assert json.loads(summary.read_text())["complete"] is False
+        print(f"passed: ScreenCaptureKit {phase} denial preserves a failed session manifest: {denied}")
+
     if not status["ready"]:
         no_model = root / f"missing-model-{time.time_ns()}"
         result = subprocess.run([binary, "record", "--app", "com.robertmeta.capture-it.fixture.selected", "--out", str(no_model), "--duration", "1"], capture_output=True, text=True, timeout=20)

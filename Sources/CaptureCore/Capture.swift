@@ -1,6 +1,7 @@
 import AVFoundation
 import AudioToolbox
 import CoreAudio
+import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -23,8 +24,10 @@ final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         _ = try Hardware.resolveApp(bundle, processID: processID)
     }
 
-    func start() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    func prepare() async throws -> SCContentFilter {
+        let content: SCShareableContent
+        do { content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) }
+        catch { throw ScreenCaptureAccess.explain(error) }
         let matches = content.applications.filter { $0.bundleIdentifier == bundle && (selectedPID == nil || $0.processID == selectedPID) }
         guard matches.count == 1, let app = matches.first else {
             throw CaptureError.message("ScreenCaptureKit requires one running app matching \(bundle). Open its window and start playback.")
@@ -33,8 +36,11 @@ final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             throw CaptureError.message("No display is available for the application's audio filter")
         }
         pid = app.processID
-        let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
         diagnostic("Selected capture app: \(app.bundleIdentifier), pid \(app.processID)")
+        return SCContentFilter(display: display, including: [app], exceptingWindows: [])
+    }
+
+    func start(filter: SCContentFilter) async throws {
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.captureMicrophone = true
@@ -51,8 +57,9 @@ final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "capture-it.app.callback", qos: .userInteractive))
         try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: DispatchQueue(label: "capture-it.mic.callback", qos: .userInteractive))
+        do { try await stream.startCapture() }
+        catch { throw ScreenCaptureAccess.explain(error) }
         self.stream = stream
-        try await stream.startCapture()
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
@@ -89,6 +96,16 @@ final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let stopping = stream
         stream = nil
         try await stopping?.stopCapture()
+    }
+}
+
+enum ScreenCaptureAccess {
+    static var screenRecordingGranted: Bool { CGPreflightScreenCaptureAccess() }
+
+    static func explain(_ error: Error) -> Error {
+        let native = error as NSError
+        guard native.domain == SCStreamErrorDomain, native.code == SCStreamError.Code.userDeclined.rawValue else { return error }
+        return CaptureError.message("ScreenCaptureKit could not access screen recording for this launch (\(native.domain) \(native.code)). In System Settings → Privacy & Security → Screen & System Audio Recording, enable the terminal or capture-it entry in the screen and audio section. After granting access, quit and reopen the terminal, then rerun capture-it from the same installed path.")
     }
 }
 
