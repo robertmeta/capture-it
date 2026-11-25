@@ -29,13 +29,31 @@ private struct ModelManifest: Decodable {
 
     private static func run() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        guard arguments.count == 1 else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
+        let reviewing = arguments.first == "--speakers" && (4...5).contains(arguments.count)
+        guard arguments.count == 1 || reviewing else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
         if arguments[0] == "--help" {
             print("Offline FluidAudio hook: EVENT_JSON → diarization.json and optional speaker-transcript.jsonl/.txt. --check validates installed models. No runtime downloads.")
             return
         }
         let spec = try JSONDecoder().decode(ModelSpec.self, from: Data(contentsOf: Bundle.module.url(forResource: "model-spec", withExtension: "json")!))
+        if arguments == ["--people"] {
+            let people = try SpeakerReview.references(revision: spec.revision)
+            if people.isEmpty { print("No remembered voices") }
+            for name in people.keys.sorted() { print("\(name)\t\(people[name]!.count) samples") }
+            return
+        }
         let directory = modelDirectory()
+        if reviewing {
+            try await SpeakerReview.review(session: URL(fileURLWithPath: arguments[1]), run: arguments[2],
+                                           speaker: arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
+                                           revision: spec.revision) {
+                _ = try verifyModels(directory: directory, spec: spec)
+                let manager = OfflineDiarizerManager()
+                manager.initialize(models: try loadModels(directory: directory))
+                return manager
+            }
+            return
+        }
         let manifest = try verifyModels(directory: directory, spec: spec)
         if arguments[0] == "--check" {
             print("Offline models ready: \(manifest.repository)@\(manifest.revision), \(manifest.files.count) verified files")
@@ -70,7 +88,19 @@ private struct ModelManifest: Decodable {
             }
             return SpeakerTurn(start: start, end: min(end, duration), speaker: String(describing: segment.speakerId))
         }.sorted { ($0.start, $0.end, $0.speaker) < ($1.start, $1.end, $1.speaker) }
-        // Keep optional meeting evidence without interpreting or inventing identities.
+        let references = try SpeakerReview.references(revision: spec.revision)
+        var labels: [String: Identity] = [:]
+        if !references.isEmpty {
+            let examples = voiceExamples(turns)
+            for (id, vector) in result.speakerDatabase ?? [:] where examples[id]?.isEmpty == false {
+                if let name = VoiceMatching.match(vector, references: references) {
+                    labels[id] = Identity(name: name, source: "voice-match")
+                }
+            }
+        }
+        try writeJSON(labels, to: output.appendingPathComponent("speaker-identities.json"))
+        let names = labels.mapValues(\.name)
+        // Keep the anonymous cluster IDs alongside the separate identity evidence.
         let event = try JSONSerialization.jsonObject(with: Data(contentsOf: inputURL)) as! [String: Any]
         struct Report: Encodable {
             let version = 1
@@ -102,16 +132,16 @@ private struct ModelManifest: Decodable {
                 let phrase = try JSONDecoder().decode(TranscriptPhrase.self, from: Data(line.utf8))
                 let attributed = try PhraseAttribution.attribute(phrase, turns: turns)
                 structured.append(try jsonlEncoder.encode(attributed)); structured.append(10)
-                text += PhraseAttribution.line(attributed)
+                text += PhraseAttribution.line(attributed, names: names)
             }
             try writeArtifact(structured, to: output.appendingPathComponent("speaker-transcript.jsonl"))
             try writeArtifact(Data(text.utf8), to: output.appendingPathComponent("speaker-transcript.txt"))
-            object["attribution"] = "phrase overlap only; mixed/unknown preserved; no word alignment or real-name inference"
+            object["attribution"] = "phrase overlap only; mixed/unknown preserved; see speaker-identities.json for assigned and voice-matched names"
         }
         // Write the completion artifact last, after every derived artifact succeeds.
         try writeArtifact(try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
                           to: output.appendingPathComponent("diarization.json"))
-        print("Saved \(turns.count) speaker turns (\(Set(turns.map(\.speaker)).count) anonymous speakers) → \(output.path)")
+        print("Saved \(turns.count) speaker turns (\(Set(turns.map(\.speaker)).count) speakers, \(names.count) voice matches) → \(output.path)")
     }
 
     private static func modelDirectory() -> URL {

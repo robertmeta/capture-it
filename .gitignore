@@ -53,6 +53,9 @@ diarization.json
 diarization.rttm
 speaker-transcript.txt
 speaker-transcript.jsonl
+speaker-identities.json
+*.voice/
+.enrollment-*/
 
 # Local signing keys and credentials.
 *.pem

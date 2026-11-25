@@ -112,6 +112,24 @@ Ctrl-C again skips or cancels the remaining processing. To skip automatic labels
 capture-it teams --no-fluid
 ```
 
+### Remember a speaker
+
+After a call, list its detected voices, listen to an example, then assign a name.
+Use the speaker ID printed for that recording.
+
+```sh
+capture-it speakers ./my-call
+capture-it speakers ./my-call --listen S1
+capture-it speakers ./my-call --assign S1 --name "Joe Smith"
+capture-it people
+```
+
+The assignment updates Joe’s turns in the call’s `speaker-transcript.txt` and
+saves up to three isolated voice samples on this Mac. Future recordings with
+FluidAudio enabled automatically use remembered names when the voices match.
+Confirm Joe in another recording under the same name to add more examples.
+Names appear after saving. [Voice library and matching details](docs/fluid-audio-hook.md#remembered-voices).
+
 ## Stop and save
 
 - **q:** in a foreground interactive terminal, start a graceful stop without
@@ -273,8 +291,8 @@ installed helper is selected, or 300 seconds otherwise; override with
 include it in your chosen hook order. `--no-fluid` disables automatic selection;
 an explicit `--hook` still runs.
 
-Mixed phrases remain mixed; this does not infer people's names or provide word
-alignment. See the [setup and artifact details](docs/fluid-audio-hook.md).
+Mixed phrases retain their candidate speakers. Remembered names come from explicit
+voice enrollments and local matching. See the [setup and artifact details](docs/fluid-audio-hook.md).
 
 ## Dependability and limits
 

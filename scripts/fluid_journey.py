@@ -28,46 +28,54 @@ phrases = [
     ("Daniel", "The next step is to check the audio files and finish the local analysis. I will prepare the test results before our next meeting."),
     ("Samantha", "That sounds good to me. I will review the summary and make sure the action items are clear. Thank you for walking through the plan.")
 ]
-clips = []
-for index, (voice, text) in enumerate(phrases):
-    aiff = root / f"voice-{index}.aiff"
-    mono = root / f"voice-{index}.wav"
-    subprocess.run(["/usr/bin/say", "-v", voice, "-r", "165", "-o", str(aiff), text], check=True)
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(aiff), "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(mono)], check=True)
-    with wave.open(str(mono)) as reader:
-        clips.append(reader.readframes(reader.getnframes()))
 
+
+def create_session(session, phrases):
+    session.mkdir(mode=0o700)
+    clips = []
+    for index, (voice, text) in enumerate(phrases):
+        aiff = session.parent / f"{session.name}-voice-{index}.aiff"
+        mono = session.parent / f"{session.name}-voice-{index}.wav"
+        subprocess.run(["/usr/bin/say", "-v", voice, "-r", "165", "-o", str(aiff), text], check=True)
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(aiff), "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(mono)], check=True)
+        with wave.open(str(mono)) as reader:
+            clips.append(reader.readframes(reader.getnframes()))
+
+    segments = []
+    intervals = []
+    frames = 0
+    with wave.open(str(session / "recording.wav"), "wb") as writer:
+        writer.setnchannels(3); writer.setsampwidth(2); writer.setframerate(48000)
+        for index, clip in enumerate(clips):
+            start = frames / 48000
+            samples = struct.unpack(f"<{len(clip) // 2}h", clip)
+            data = bytearray(len(samples) * 6)
+            for offset, value in enumerate(samples):
+                # Two voices travel through different source lanes: app L/R, then mic.
+                channels = (value, value, 0) if index % 2 == 0 else (0, 0, value)
+                struct.pack_into("<hhh", data, offset * 6, *channels)
+            writer.writeframes(data)
+            frames += len(samples)
+            end = frames / 48000
+            intervals.append((start, end))
+            segments.append({"source": "recording", "start": start, "duration": end - start, "text": phrases[index][1]})
+            writer.writeframes(bytes(48000 * 6)); frames += 48000
+        # A phrase crossing both voices must not be attributed to just one of them.
+        segments.append({"source": "recording", "start": intervals[0][0], "duration": intervals[1][1] - intervals[0][0], "text": phrases[0][1] + " " + phrases[1][1]})
+    manifest = {"version": 2, "startedAt": "local-fixture", "app": "fixture", "microphone": "fixture", "locale": "en-US",
+                "recording": "complete", "transcription": "complete", "chunks": [{"file": "recording.wav", "source": "recording", "start": 0,
+                "sampleRate": 48000, "channels": 3, "frames": frames, "closed": True}], "issues": [],
+                "channelLayout": ["app-left", "app-right", "microphone"], "meeting": {"title": "Offline hook fixture", "source": "explicit", "verified": True, "status": "provided"}}
+    (session / "session.json").write_text(json.dumps(manifest))
+    (session / "transcript.jsonl").write_text("".join(json.dumps(row) + "\n" for row in segments))
+    (session / "transcript.txt").write_text("\n".join(row["text"] for row in segments))
+    (session / "transcript.json").write_text(json.dumps({"complete": True, "segmentCount": len(segments)}))
+    return segments, intervals, frames, manifest
+
+
+os.environ["CAPTURE_IT_VOICES"] = str(root / "voices")
 session = root / "fixture session"
-session.mkdir(mode=0o700)
-segments = []
-intervals = []
-frames = 0
-with wave.open(str(session / "recording.wav"), "wb") as writer:
-    writer.setnchannels(3); writer.setsampwidth(2); writer.setframerate(48000)
-    for index, clip in enumerate(clips):
-        start = frames / 48000
-        samples = struct.unpack(f"<{len(clip) // 2}h", clip)
-        data = bytearray(len(samples) * 6)
-        for offset, value in enumerate(samples):
-            # Two voices travel through different source lanes: app L/R, then mic.
-            channels = (value, value, 0) if index % 2 == 0 else (0, 0, value)
-            struct.pack_into("<hhh", data, offset * 6, *channels)
-        writer.writeframes(data)
-        frames += len(samples)
-        end = frames / 48000
-        intervals.append((start, end))
-        segments.append({"source": "recording", "start": start, "duration": end - start, "text": phrases[index][1]})
-        writer.writeframes(bytes(48000 * 6)); frames += 48000
-    # A phrase crossing both voices must not be attributed to just one of them.
-    segments.append({"source": "recording", "start": intervals[0][0], "duration": intervals[1][1] - intervals[0][0], "text": phrases[0][1] + " " + phrases[1][1]})
-manifest = {"version": 2, "startedAt": "local-fixture", "app": "fixture", "microphone": "fixture", "locale": "en-US",
-            "recording": "complete", "transcription": "complete", "chunks": [{"file": "recording.wav", "source": "recording", "start": 0,
-            "sampleRate": 48000, "channels": 3, "frames": frames, "closed": True}], "issues": [],
-            "channelLayout": ["app-left", "app-right", "microphone"], "meeting": {"title": "Offline hook fixture", "source": "explicit", "verified": True, "status": "provided"}}
-(session / "session.json").write_text(json.dumps(manifest))
-(session / "transcript.jsonl").write_text("".join(json.dumps(row) + "\n" for row in segments))
-(session / "transcript.txt").write_text("\n".join(row["text"] for row in segments))
-(session / "transcript.json").write_text(json.dumps({"complete": True, "segmentCount": len(segments)}))
+segments, intervals, frames, manifest = create_session(session, phrases)
 
 
 def hashes():
@@ -102,9 +110,9 @@ assert abs(diarization["duration"] - frames / 48000) < 0.01
 assert all(0 <= turn["start"] < turn["end"] <= diarization["duration"] for turn in turns)
 
 
-def dominant(start, end):
+def dominant(start, end, candidates=turns):
     totals = {}
-    for turn in turns:
+    for turn in candidates:
         overlap = max(0, min(end, turn["end"]) - max(start, turn["start"]))
         totals[turn["speaker"]] = totals.get(turn["speaker"], 0) + overlap
     speaker = max(totals, key=totals.get)
@@ -120,6 +128,76 @@ assert derived[-1]["attribution"] == "mixed" and len(derived[-1]["speakers"]) >=
 assert not list(output.glob(".analysis-*.wav")), "Temporary analysis audio was not removed"
 assert (output / "diarization.rttm").read_text().startswith("SPEAKER recording")
 print(f"passed: actual offline FluidAudio through hooks in {time.monotonic() - began:.2f}s; repeated synthetic voices retain distinct labels across app/mic lanes; mixed phrases, title, private output and original hashes verified: {output}")
+
+# Use the normal installed-sibling discovery path, isolated from the user's binaries and voice library.
+review_cli = Path(binary)
+if not installed:
+    bindir = root / "bin"
+    bindir.mkdir()
+    review_cli = bindir / "capture-it"
+    shutil.copy2(binary, review_cli)
+    shutil.copy2(hook, bindir / "capture-it-fluid")
+    (bindir / ".capture-it-fluid").symlink_to(Path("hooks/fluid-audio/.build/release").resolve())
+
+
+def review(*args, expected=0):
+    command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)", str(review_cli), *map(str, args)]
+    checked = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    assert checked.returncode == expected, (args, checked.stderr)
+    return checked.stdout
+
+
+library = root / "voices"
+assert "No remembered voices" in review("people")
+assert "(unnamed)" in review("speakers", session)
+review("speakers", session, "--listen", labels[0])
+review("speakers", session, "--assign", "nonexistent", "--name", "Joe Smith", expected=1)
+assert not library.exists()
+for name in ["Joe", "Joe Smith", "Joe Smith"]:
+    review("speakers", session, "--assign", labels[0], "--name", name)
+assert f"{labels[0]}\tJoe Smith" in review("speakers", session)
+assert (output / "speaker-transcript.txt").read_text().count("[Joe Smith]") == 2
+assert hashes() == before
+profiles = list(library.glob("*.voice/profile.json"))
+assert len(profiles) == 1
+profile = json.loads(profiles[0].read_text())
+clips = list(profiles[0].parent.glob("*.wav"))
+assert profile["name"] == "Joe Smith" and len(profile["embeddings"]) == len(clips) >= 2
+for clip in clips:
+    assert clip.stat().st_mode & 0o077 == 0
+    pcm = subprocess.check_output(["ffmpeg", "-loglevel", "error", "-i", str(clip), "-f", "s16le", "-"])
+    assert 1.99 * 32000 <= len(pcm) <= 8.01 * 32000 and len(set(pcm)) > 100
+
+later = root / "second call"
+new_phrases = [
+    ("Samantha", "Thank you for coming today. We have a different project to discuss, and I can stay until noon."),
+    ("Daniel", "Good morning everyone. Yesterday the team finished building a prototype. I brought a few recordings so we can listen together."),
+    ("Samantha", "That sounds wonderful. Could you play the example from the beginning and tell us which instruments you heard?"),
+    ("Daniel", "Of course. The first instrument is the piano, then a violin comes in. I especially like the final passage."),
+]
+_, later_intervals, _, _ = create_session(later, new_phrases)
+review("hooks", later)
+second = next(later.glob("hooks/*/*/diarization.json")).parent
+second_turns = json.loads((second / "diarization.json").read_text())["turns"]
+second_labels = [dominant(start, end, second_turns) for start, end in later_intervals]
+matches = json.loads((second / "speaker-identities.json").read_text())
+assert second_labels[1] == second_labels[3] and matches == {second_labels[1]: {"name": "Joe Smith", "source": "voice-match"}}, (matches, second_labels)
+assert second_labels[0] not in matches and second_labels[2] not in matches
+assert "[Joe Smith]" in (second / "speaker-transcript.txt").read_text()
+assert len(list(library.glob("*.voice"))) == 1, "Automatic matches must never enroll more samples"
+review("speakers", later, "--assign", second_labels[1], "--name", "Joe Smith")
+assert len(list(library.glob("*.voice/profile.json"))) == 2
+review("speakers", later, "--assign", second_labels[0], "--name", "Alex Chen")
+roster = review("people").splitlines()
+assert len(roster) == 2 and roster[0].startswith("Alex Chen\t") and roster[1].startswith("Joe Smith\t")
+review("hooks", session)
+rerun = next(p.parent for p in session.glob("hooks/*/*/diarization.json") if p.parent != output)
+assert {v["name"] for v in json.loads((rerun / "speaker-identities.json").read_text()).values()} == {"Joe Smith", "Alex Chen"}
+review("speakers", session, expected=1)
+assert "Joe Smith" in review("speakers", session, "--run", f"{output.parent.name}/{output.name}")
+assert hashes() == before
+print("passed: one-step enrollment, multiple playable private samples, correction, repeat enrollment, and offline recognition in a second recording with new words and speaker order")
+
 
 if installed:
     def latest_report(folder=session):
@@ -208,7 +286,7 @@ if installed:
     print("passed: installed automatic helper with network denied; explicit dedup/order, --no-fluid, audio-only, missing/corrupt models, timeout and real analysis cancellation; original hashes preserved")
 
     # Capture a real controlled app stream and local mic, then stop with Ctrl-C.
-    player = start_player(root, "FluidCapture", str(root / "voice-0.wav"), binary)
+    player = start_player(root, "FluidCapture", str(root / f"{session.name}-voice-0.wav"), binary)
     child = None
     captured = root / "captured session"
     try:

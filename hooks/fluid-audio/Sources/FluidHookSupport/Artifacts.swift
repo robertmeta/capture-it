@@ -48,7 +48,7 @@ public struct TranscriptPhrase: Codable, Sendable {
 }
 
 /// A derived label plus the untouched source phrase and overlap evidence.
-public struct AttributedPhrase: Encodable {
+public struct AttributedPhrase: Codable {
     public let phrase: TranscriptPhrase
     public let speakers: [String]
     public let attribution: String
@@ -82,10 +82,11 @@ public enum PhraseAttribution {
     }
 
     /// Build a derived text copy. Input transcript files are never modified.
-    public static func line(_ value: AttributedPhrase) -> String {
+    public static func line(_ value: AttributedPhrase, names: [String: String] = [:]) -> String {
         let stamp = timestamp(value.phrase.start)
-        let label = value.attribution == "single-speaker-overlap" ? value.speakers[0]
-            : (value.attribution == "mixed" ? "mixed: " + value.speakers.joined(separator: ", ") : "unknown")
+        let speakers = value.speakers.map { names[$0] ?? $0 }
+        let label = value.attribution == "single-speaker-overlap" ? speakers.first ?? "unknown"
+            : (value.attribution == "mixed" ? "mixed: " + speakers.joined(separator: ", ") : "unknown")
         return "[\(stamp)] [\(label)] \(value.phrase.text.replacingOccurrences(of: "\n", with: " "))\n"
     }
 
@@ -96,11 +97,17 @@ public enum PhraseAttribution {
 
 /// Prepare the same .25 L + .25 R + .5 mic mix at 16 kHz using bounded buffers.
 public enum AnalysisAudio {
-    @discardableResult public static func prepare(wav: URL, destination: URL) throws -> Double {
+    @discardableResult public static func prepare(wav: URL, destination: URL, interval: Range<Double>? = nil) throws -> Double {
         let file = try AVAudioFile(forReading: wav, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.processingFormat.channelCount == 3, file.processingFormat.sampleRate == 48_000 else {
             throw HookFailure("FluidAudio hook expects capture-it's three-channel 48 kHz WAV")
         }
+        let rate = file.processingFormat.sampleRate
+        let duration = Double(file.length) / rate
+        let span = interval ?? 0..<duration
+        guard span.lowerBound >= 0, span.upperBound <= duration else { throw HookFailure("Speaker interval exceeds recording.wav") }
+        file.framePosition = AVAudioFramePosition(ceil(span.lowerBound * rate))
+        let endFrame = interval == nil ? file.length : min(file.length, AVAudioFramePosition(floor(span.upperBound * rate)))
         let mono = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
         let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
         guard let converter = AVAudioConverter(from: mono, to: outputFormat) else { throw HookFailure("Cannot create audio resampler") }
@@ -109,8 +116,10 @@ public enum AnalysisAudio {
         let incoming = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8190)!
         let mixed = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: 8190)!
         let converted = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 3000)!
-        while file.framePosition < file.length {
-            try file.read(into: incoming)
+        while file.framePosition < endFrame {
+            let frames = AVAudioFrameCount(min(Int64(incoming.frameCapacity), endFrame - file.framePosition))
+            try file.read(into: incoming, frameCount: frames)
+            guard incoming.frameLength > 0 else { throw HookFailure("Unexpected end of recording.wav") }
             mixed.frameLength = incoming.frameLength
             let channels = incoming.floatChannelData!
             for index in 0 ..< Int(incoming.frameLength) {
@@ -133,7 +142,7 @@ public enum AnalysisAudio {
             if converted.frameLength > 0 { try output.write(from: converted) }
             if result == .endOfStream || converted.frameLength == 0 { break }
         }
-        return Double(file.length) / file.processingFormat.sampleRate
+        return span.upperBound - span.lowerBound
     }
 }
 

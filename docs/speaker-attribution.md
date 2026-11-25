@@ -23,24 +23,10 @@ from microphone audio before combining results. The mic channel identifies an
 input source, not necessarily one person: a room mic can contain several voices.
 Application L/R are playback channels, not separate remote participants.
 
-A [hook](hooks.md) can run a diarization/alignment tool and write derived files
-such as `speakers.json` and `named-transcript.md` in its output directory. Keep
-the original transcript intact. Treat identity as a separate optional field;
-for example:
-
-```json
-{
-  "start": 12.4,
-  "end": 15.7,
-  "speaker": "speaker-2",
-  "name": null,
-  "identityEvidence": []
-}
-```
-
-This illustrates an enrichment format, not an implemented capture-it output
-schema. Diarization and word alignment are not included in the current app.
-An agent can orchestrate a chosen tool, but naming voices requires evidence.
+The optional FluidAudio hook produces anonymous turns. After capture, a listener
+can name a detected voice and enroll it for future recordings. Matching runs
+locally against confirmed examples. The original speaker IDs remain available
+beside the identity evidence. [Setup and enrollment](fluid-audio-hook.md#remembered-voices).
 
 ## Getting names from the application
 
@@ -93,9 +79,9 @@ assume identical metadata coverage.
 
 ## Recommendation for this CLI
 
-Keep Apple speech and native audio capture as the default. Add an optional local
-FluidAudio-based diarization hook first if speaker labels are needed, then
-evaluate it on representative meetings before selecting a model. This is a
+Keep Apple speech and native audio capture as the default. The optional local
+FluidAudio hook supplies post-session speaker turns and voice matching. Evaluate
+its results on representative meetings. This is a
 project-fit recommendation based on its documented Swift/Core ML and file APIs,
 not a claim that its accuracy is best. The hook must choose how to use app L/R
 and the separate mic; automatic averaging is not always the desired mix.

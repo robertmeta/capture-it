@@ -16,6 +16,14 @@ public enum CLI {
       capture-it transcribe SESSION_DIRECTORY [--out DIRECTORY] [--locale en-US]
       capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
 
+      capture-it people                         # remembered names and sample counts
+      capture-it speakers SESSION_DIRECTORY [--run UUID/NNN]
+      capture-it speakers SESSION_DIRECTORY --listen SPEAKER_ID
+      capture-it speakers SESSION_DIRECTORY --assign SPEAKER_ID --name "Joe Smith"
+
+    Naming a speaker saves local voice samples for recognition in future recordings.
+    The speaker list shows IDs, names and example times after FluidAudio finishes.
+
     Record options:
       --app NAME_OR_PATTERN  Name/bundle substring or quoted * / ? wildcard
                              One match auto-selects; multiple matches prompt
@@ -50,7 +58,7 @@ public enum CLI {
         guard let first = arguments.first else { print(help); return 0 }
         if first == "--help" || first == "-h" || arguments.dropFirst().contains("--help") { print(help); return 0 }
         if first == "--version" { print(captureItVersion); return 0 }
-        let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks"]
+        let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks", "speakers", "people"]
         let command = commands.contains(first) ? first : "record"
         let args = try Arguments(commands.contains(first) ? Array(arguments.dropFirst()) : arguments)
         switch command {
@@ -101,6 +109,31 @@ public enum CLI {
                 print("Accessibility for window titles: \(MeetingObserver.isTrusted ? "ready" : "not granted; run setup-accessibility or use --title")")
                 print("FluidAudio: \(InstalledHooks.fluid().map { "installed at \($0.path); runs after saving (--no-fluid to skip)" } ?? "not installed; run make setup")")
             }
+        case "people", "speakers":
+            let helperArguments: [String]
+            if command == "people" {
+                try args.validate(allowed: [])
+                helperArguments = ["--people"]
+            } else {
+                try args.validate(allowed: ["--run", "--listen", "--assign", "--name"], positionals: 1...1)
+                let assign = args.values["--assign"]
+                let listen = args.values["--listen"]
+                guard (assign == nil) == (args.values["--name"] == nil), assign == nil || listen == nil,
+                      assign != "", listen != "" else {
+                    throw CaptureError.message("Use --listen ID or --assign ID --name NAME")
+                }
+                helperArguments = ["--speakers", args.positionals[0], args.values["--run"] ?? "",
+                                   assign ?? listen ?? ""] + (args.values["--name"].map { [$0] } ?? [])
+            }
+            guard let helper = InstalledHooks.fluid() else {
+                throw CaptureError.message("Speaker review needs the installed capture-it-fluid helper. Run make setup.")
+            }
+            let process = Process()
+            process.executableURL = helper
+            process.arguments = helperArguments
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
         case "record":
             try args.validate(allowed: ["--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
             let hooks = try args.hookOptions()

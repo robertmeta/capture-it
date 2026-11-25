@@ -96,6 +96,7 @@ Each run writes into its normal `SESSION/hooks/UUID/NNN/` directory:
 | File | Meaning |
 | --- | --- |
 | `diarization.json` | Completed analysis: engine, pinned model revision, duration, processing time, speaker IDs, turns, meeting evidence and transcript completion |
+| `speaker-identities.json` | Map from recording-local speaker ID to a name and its source (`assigned` or `voice-match`). Unrecognized speakers have no entry. |
 | `diarization.rttm` | Standard speaker intervals, in seconds from recording start |
 | `speaker-transcript.jsonl` | Original phrases plus overlapping speaker IDs, coverage and attribution status; created when source JSONL exists |
 | `speaker-transcript.txt` | Readable speaker-labeled copy, preserving original words and phrase times |
@@ -107,8 +108,7 @@ Audio-only sessions produce the diarization artifacts without inventing text.
 
 ## What a label means
 
-These are anonymous speaker IDs within this recording, not people's names or
-stable identities across meetings. No Teams/Slack roster is consulted.
+Each speaker ID belongs to a single analysis run. The separate identity map supplies display names for known voices.
 
 Attribution uses phrase time overlap rather than forced word alignment:
 
@@ -121,6 +121,38 @@ The hook preserves each source phrase together; it never guesses where to split
 its words. Simultaneous voices do not inflate interval coverage. Existing ASR
 timing errors and diarization errors can still affect labels. For word-accurate
 speaker turns, a later alignment stage would be needed.
+
+## Remembered voices
+
+`capture-it speakers SESSION` lists each ID, its current name, and example times.
+Use `--listen ID` to hear the longest isolated example. Use `--assign ID --name
+"Joe Smith"` to label every turn assigned to that ID, update the readable
+speaker transcript, and enroll Joe for future calls. If the session has several
+completed analyses, the CLI lists the exact `--run UUID/NNN` choices. Previously
+saved version-1 reports can be reviewed after upgrading the CLI and helper.
+
+Each confirmation saves up to three separate clips of 2–8 seconds where just
+that speaker was detected. With too little isolated speech, the name applies
+only to that recording. Use the same full name across recordings to add examples
+from other microphones or environments. Repeating an assignment reuses its clips.
+Assigning a different name corrects that enrollment and its recording. Use a
+distinguishing name for people who share a full name.
+
+`capture-it people` lists remembered names and sample counts. Private
+`.voice` folders under `~/Library/Application Support/capture-it/voices`
+contain playable mono WAVs and their names and model-specific embeddings.
+`CAPTURE_IT_VOICES` selects an alternate local library for both enrollment
+and recognition. The assignment prints its folder path. Removing one of these
+folders forgets its examples for future processing.
+
+After each capture, FluidAudio compares each eligible speaker’s embedding with
+confirmed examples from the same model revision. It accepts a name at cosine
+similarity 0.70 or higher with at least a 0.10 lead over the next person.
+Weak or ambiguous matches retain the recording-local ID. Only a manual
+assignment adds training examples. Noise, overlap, similar voices and changes
+in microphone can affect accuracy. The original recording and live transcript
+are preserved. Structured transcript consumers can join the `speakers` array
+to `speaker-identities.json` in the same directory.
 
 ## Verification
 
