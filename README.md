@@ -41,7 +41,7 @@ Open Teams, join your call, then run:
 capture-it teams
 ```
 
-That creates `./teams-yyyyMMdd-HHmmss/` in your current directory. The WAV grows
+That creates `~/Documents/capture-it/recordings/teams-yyyyMMdd-HHmmss/`. The WAV grows
 while you record; finalized words appear on screen and in `transcript.txt`.
 **Press `q` or Ctrl-C to stop and save.** In an interactive recording, `q` works
 without Enter. The WAV finishes first, then pending transcription and hooks.
@@ -114,12 +114,20 @@ capture-it teams --no-fluid
 
 ### Remember a speaker
 
-After a call, list its detected voices, listen to an example, then assign a name.
-Use the speaker ID printed for that recording.
+After saving a call, capture-it checks for remembered voices. In a foreground
+terminal it plays one example for each unmatched speaker and asks for a name.
+Enter a name to save it, press Enter to skip that speaker, or type `:quit` to
+finish. Ctrl-C also ends the review. The recording and confirmed names are
+already saved. Use `--no-review` to keep automatic matching and skip the prompts.
+
+To record raw audio now and review it later, use the session path printed when
+the recording finishes:
 
 ```sh
-capture-it speakers ./my-call
-capture-it speakers ./my-call --listen S1
+capture-it teams --no-transcribe --no-fluid --out ./my-call
+capture-it hooks ./my-call                 # run FluidAudio and review
+capture-it speakers ./my-call              # resume an existing review
+capture-it speakers ./my-call --list        # show IDs, names and example times
 capture-it speakers ./my-call --assign S1 --name "Joe Smith"
 capture-it people
 ```
@@ -129,6 +137,20 @@ saves up to three isolated voice samples on this Mac. Future recordings with
 FluidAudio enabled automatically use remembered names when the voices match.
 Confirm Joe in another recording under the same name to add more examples.
 Names appear after saving. [Voice library and matching details](docs/fluid-audio-hook.md#remembered-voices).
+
+### Capture home
+
+The default home is `~/Documents/capture-it`. Each call gets a folder under
+`recordings/` containing its WAV, manifest, available transcripts, and hook
+results. New voice libraries live under `voices/`. Existing recordings can
+still be opened by path. An existing default voice library in Application
+Support continues to be used with the default configuration.
+
+Use `capture-it teams --home /path/to/home` for another home, or set
+`CAPTURE_IT_HOME` for all commands. Pass the same home to later `hooks`,
+`speakers`, and `people` commands to use its voice library. `--out` selects
+an exact session directory and `CAPTURE_IT_VOICES` selects an exact voice
+library. macOS may sync Documents if you have enabled iCloud Drive for it.
 
 ## Stop and save
 
@@ -192,7 +214,7 @@ capture-it teams --no-transcribe
 capture-it teams --locale en-GB
 
 # Retry transcription without changing the original session.
-capture-it transcribe ./teams-20261117-143000
+capture-it transcribe ~/Documents/capture-it/recordings/teams-20261117-143000
 ```
 
 `capture-it record teams` and `capture-it record --app teams` also work.
@@ -234,7 +256,7 @@ does not block the transcript-file or WAV workers.
 Point your terminal assistant at the saved text, for example:
 
 ```text
-Read ./teams-20261117-143000/transcript.txt. Summarize the decisions,
+Read ~/Documents/capture-it/recordings/teams-20261117-143000/transcript.txt. Summarize the decisions,
 open questions and action items, keeping names only where stated.
 ```
 
@@ -259,7 +281,7 @@ capture-it teams --hook ./examples/hooks/inspect-session.py
 capture-it teams --hook ./my-diarizer --hook ./my-notes --hook-timeout 900
 
 # Retry processing on an existing session.
-capture-it hooks ./teams-20261117-143000 --hook ./my-notes
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000 --hook ./my-notes
 ```
 
 See the [hook contract and agy/Claude/Codex examples](docs/hooks.md).
@@ -278,7 +300,7 @@ make test-fluid
 
 # Installed CLI: automatic speaker labels after saving.
 capture-it teams
-capture-it hooks ./teams-20261117-143000
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000
 
 # Checkout CLI without a sibling helper:
 .build/release/capture-it teams --hook ./hooks/fluidaudio --hook-timeout 900

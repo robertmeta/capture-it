@@ -79,14 +79,17 @@ try:
         result = subprocess.run(command(query, directory), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stderr
         assert_capture(directory, children[0])
-    # Public shorthand creates a query-dated directory in the caller's cwd.
+    # Both shorthand forms create a dated session under the selected capture home.
     work = root / "cwd"
     work.mkdir()
-    for args in (["Selected"], ["record", "*Selected*"]):
-        before = set(work.iterdir())
-        result = subprocess.run([binary, *args, "--duration", "1", "--no-transcribe"], cwd=work, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+    for args in (["Selected"], ["record", "*Selected*", "--home", str(root / "flag home")]):
+        capture_home = root / ("flag home" if "--home" in args else "env home")
+        recordings = capture_home / "recordings"
+        before = set(recordings.glob("*"))
+        result = subprocess.run([binary, *args, "--duration", "1", "--no-transcribe"], cwd=work, env=dict(os.environ, CAPTURE_IT_HOME=str(root / "env home")), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stderr
-        created = set(work.iterdir()) - before
+        assert not list(work.iterdir())
+        created = set(recordings.iterdir()) - before
         assert len(created) == 1
         output = created.pop()
         assert re.fullmatch(r"selected-\d{8}-\d{6}(?:-\d+)?", output.name), output

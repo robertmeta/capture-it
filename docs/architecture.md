@@ -15,7 +15,7 @@ Noninteractive ambiguity fails before output creation or capture permissions.
 See [app selection](adr/0004-select-app-by-name-or-pattern.md).
 
 The short form `capture-it teams` routes to recording. Default output is a
-sanitized search-term plus local timestamp in the current directory. Before
+sanitized search-term plus local timestamp under the capture home’s `recordings/` directory. Before
 opening capture, explicit `--mic` wins; otherwise a single exposed active
 input from the app's audio processes is preferred, with system-default fallback.
 Input device scope and active-input status come from public Core Audio properties.

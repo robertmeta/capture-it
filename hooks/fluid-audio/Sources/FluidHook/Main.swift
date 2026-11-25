@@ -30,7 +30,8 @@ private struct ModelManifest: Decodable {
     private static func run() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
         let reviewing = arguments.first == "--speakers" && (4...5).contains(arguments.count)
-        guard arguments.count == 1 || reviewing else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
+        let dialogue = arguments.first == "--review" && arguments.count == 3
+        guard arguments.count == 1 || reviewing || dialogue else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
         if arguments[0] == "--help" {
             print("Offline FluidAudio hook: EVENT_JSON → diarization.json and optional speaker-transcript.jsonl/.txt. --check validates installed models. No runtime downloads.")
             return
@@ -43,9 +44,9 @@ private struct ModelManifest: Decodable {
             return
         }
         let directory = modelDirectory()
-        if reviewing {
+        if reviewing || dialogue {
             try await SpeakerReview.review(session: URL(fileURLWithPath: arguments[1]), run: arguments[2],
-                                           speaker: arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
+                                           interactive: dialogue, speaker: dialogue ? "" : arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
                                            revision: spec.revision) {
                 _ = try verifyModels(directory: directory, spec: spec)
                 let manager = OfflineDiarizerManager()
@@ -104,6 +105,7 @@ private struct ModelManifest: Decodable {
         let event = try JSONSerialization.jsonObject(with: Data(contentsOf: inputURL)) as! [String: Any]
         struct Report: Encodable {
             let version = 1
+            let speakerReviewVersion = 1
             let engine = "FluidAudio offline Community-1/VBx"
             let sourceWav: String
             let modelRepository: String

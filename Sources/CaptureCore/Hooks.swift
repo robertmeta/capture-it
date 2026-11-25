@@ -5,6 +5,8 @@ import Foundation
 /// Selected executables to run after audio and transcript files have finalized.
 public struct HookOptions: Sendable {
     public var executables: [URL]
+    var home: URL?
+    var promptForSpeakers = true
     public var timeout: Double
 
     public init(executables: [URL] = [], timeout: Double = 300) {
@@ -32,6 +34,12 @@ enum InstalledHooks {
         let hook = executable.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("capture-it-fluid")
         return FileManager.default.fileExists(atPath: hook.path) ? hook : nil
     }
+}
+
+/// A review always targets the exact analysis created by this invocation.
+struct HookRun {
+    let complete: Bool
+    var speakerRun: String?
 }
 
 /// Versioned file handoff. Paths are absolute; absent transcript artifacts are nil.
@@ -92,8 +100,8 @@ struct HookResult: Codable {
 /// Child processes run only after saved artifacts are durable. No pipe connects
 /// agent output to transcript stdout, and no shell interprets executable paths.
 enum HookRunner {
-    static func run(session: URL, transcriptDirectory: URL? = nil, options: HookOptions, shutdown: ShutdownState) async throws -> Bool {
-        guard !options.executables.isEmpty else { return true }
+    static func run(session: URL, transcriptDirectory: URL? = nil, options: HookOptions, shutdown: ShutdownState) async throws -> HookRun {
+        guard !options.executables.isEmpty else { return HookRun(complete: true) }
         try options.validate()
         // On a forced recording exit, do not wait for or inspect partial text.
         let input = shutdown.interrupted ? nil : try HookEvent.load(session: session, transcriptDirectory: transcriptDirectory)
@@ -103,6 +111,8 @@ enum HookRunner {
         if let input { try atomicJSON(input, at: inputURL) }
         struct Report: Encodable { let version = 1; let results: [HookResult] }
         var results: [HookResult] = []
+        var speakerRun: String?
+        let fluid = InstalledHooks.fluid()?.resolvingSymlinksInPath()
         diagnostic("Post-session hooks → \(runDirectory.path); Ctrl-C cancels remaining hooks")
         for (index, executable) in options.executables.enumerated() {
             let output = runDirectory.appendingPathComponent(String(format: "%03d", index + 1))
@@ -113,22 +123,26 @@ enum HookRunner {
             } else {
                 diagnostic("Running hook \(index + 1)/\(options.executables.count): \(executable.path)")
                 let began = Date()
-                do { result = try await execute(executable: executable, input: inputURL, event: input!, output: output, timeout: options.timeout, shutdown: shutdown) }
+                do { result = try await execute(executable: executable, input: inputURL, event: input!, output: output, timeout: options.timeout, home: options.home, shutdown: shutdown) }
                 catch { result.status = "failed"; result.message = String(describing: error) }
                 result.duration = Date().timeIntervalSince(began)
+            }
+            if result.status == "complete", executable.resolvingSymlinksInPath() == fluid {
+                speakerRun = runDirectory.lastPathComponent + "/" + output.lastPathComponent
             }
             results.append(result)
             try atomicJSON(Report(results: results), at: runDirectory.appendingPathComponent("result.json"))
             diagnostic("Hook \(index + 1): \(result.status)\(result.message.map { "; \($0)" } ?? "")")
         }
-        return results.allSatisfy { $0.status == "complete" }
+        return HookRun(complete: results.allSatisfy { $0.status == "complete" }, speakerRun: speakerRun)
     }
 
-    private static func execute(executable: URL, input: URL, event: HookEvent, output: URL, timeout: Double, shutdown: ShutdownState) async throws -> HookResult {
+    private static func execute(executable: URL, input: URL, event: HookEvent, output: URL, timeout: Double, home: URL?, shutdown: ShutdownState) async throws -> HookResult {
         let stdout = try createPrivateFile(output.appendingPathComponent("stdout.log"))
         let stderr = try createPrivateFile(output.appendingPathComponent("stderr.log"))
         defer { try? stdout.close(); try? stderr.close() }
         var environment = ProcessInfo.processInfo.environment
+        if let home { environment["CAPTURE_IT_HOME"] = home.path }
         environment["CAPTURE_IT_EVENT"] = input.path
         environment["CAPTURE_IT_SESSION"] = event.sessionDirectory
         environment["CAPTURE_IT_WAV"] = event.wav
@@ -177,7 +191,40 @@ enum HookRunner {
         return result
     }
 
-    private static func spawn(executable: String, arguments: [String], environment: [String: String], stdout: Int32, stderr: Int32) throws -> pid_t {
+    static var foregroundTerminal: Bool {
+        isatty(STDIN_FILENO) == 1 && tcgetpgrp(STDIN_FILENO) == getpgrp()
+    }
+
+    static func reviewIfInteractive(session: URL, run: String?, options: HookOptions, shutdown: ShutdownState) throws {
+        guard options.promptForSpeakers, foregroundTerminal, !shutdown.interrupted, let run else { return }
+        // A core-only upgrade can leave an older helper beside the executable.
+        struct Capabilities: Decodable { let speakerReviewVersion: Int? }
+        let report = session.appendingPathComponent("hooks/\(run)/diarization.json")
+        let capabilities = try JSONDecoder().decode(Capabilities.self, from: Data(contentsOf: report))
+        guard capabilities.speakerReviewVersion == 1 else {
+            diagnostic("Speaker analysis saved. Run make setup to update the helper for interactive review.")
+            return
+        }
+        try review(session: session, run: run, home: options.home)
+    }
+
+    static func review(session: URL, run: String, home: URL?) throws {
+        guard let helper = InstalledHooks.fluid() else { throw CaptureError.message("Speaker review needs the installed FluidAudio helper. Run make setup.") }
+        var environment = ProcessInfo.processInfo.environment
+        if let home { environment["CAPTURE_IT_HOME"] = home.path }
+        // Keep the dialogue in the foreground process group so the terminal can deliver input and Ctrl-C.
+        let pid = try spawn(executable: helper.path, arguments: ["--review", session.path, run],
+                            environment: environment, stdout: STDERR_FILENO, stderr: STDERR_FILENO, foreground: true)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 {
+            if errno != EINTR { throw CaptureError.message("Could not wait for speaker review") }
+        }
+        guard status == 0 || status & 0x7f == SIGINT else {
+            throw CaptureError.message("Speaker review stopped. Resume with capture-it speakers and the session path.")
+        }
+    }
+
+    private static func spawn(executable: String, arguments: [String], environment: [String: String], stdout: Int32, stderr: Int32, foreground: Bool = false) throws -> pid_t {
         var actions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
         func check(_ code: Int32) throws {
@@ -187,7 +234,11 @@ enum HookRunner {
         defer { posix_spawn_file_actions_destroy(&actions) }
         try check(posix_spawnattr_init(&attributes))
         defer { posix_spawnattr_destroy(&attributes) }
-        try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
+        if foreground {
+            try check(posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO))
+        } else {
+            try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0))
+        }
         try check(posix_spawn_file_actions_adddup2(&actions, stdout, STDOUT_FILENO))
         try check(posix_spawn_file_actions_adddup2(&actions, stderr, STDERR_FILENO))
         var defaults: sigset_t = 0
@@ -195,8 +246,12 @@ enum HookRunner {
         var mask: sigset_t = 0
         try check(posix_spawnattr_setsigdefault(&attributes, &defaults))
         try check(posix_spawnattr_setsigmask(&attributes, &mask))
-        try check(posix_spawnattr_setpgroup(&attributes, 0))
-        try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT)))
+        var flags = POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
+        if !foreground {
+            try check(posix_spawnattr_setpgroup(&attributes, 0))
+            flags |= POSIX_SPAWN_SETPGROUP
+        }
+        try check(posix_spawnattr_setflags(&attributes, Int16(flags)))
         let argv = ([executable] + arguments).map { strdup($0)! } + [nil]
         let env = environment.sorted(by: { $0.key < $1.key }).map { strdup("\($0.key)=\($0.value)")! } + [nil]
         defer { for pointer in argv + env { free(pointer) } }

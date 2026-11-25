@@ -226,9 +226,12 @@ public enum Sessions {
         }
         manifest.issues = issues.all
         try atomicJSON(manifest, at: manifestURL)
+        var speakerRun: String?
         if appCapture != nil {
             do {
-                if !(try await HookRunner.run(session: options.output, options: options.hooks, shutdown: stop.state)) {
+                let run = try await HookRunner.run(session: options.output, options: options.hooks, shutdown: stop.state)
+                speakerRun = run.speakerRun
+                if !run.complete {
                     issues.add("Post-session hooks did not all complete; see the session's hooks directory")
                 }
             } catch { issues.add("Post-session hooks failed: \(error)") }
@@ -238,6 +241,8 @@ public enum Sessions {
         for issue in manifest.issues where warned.insert(issue).inserted { diagnostic(issue) }
         if appCapture == nil { diagnostic("Recording did not start. Failure details saved to \(manifestURL.path)") }
         else { diagnostic("Saved \(options.output.path); audio \(manifest.recording), transcript \(manifest.transcription)") }
+        keys?.stop()
+        try HookRunner.reviewIfInteractive(session: options.output, run: speakerRun, options: options.hooks, shutdown: stop.state)
         return captureFailed ? 1 : (manifest.issues.isEmpty ? 0 : 2)
     }
 
@@ -314,7 +319,7 @@ public enum Sessions {
         let complete = await finishRecognition(workers, shutdown: stop.state) && !stoppedEarly && issues.all.isEmpty
         try tee.finish(complete: complete, shutdown: stop.state)
         var hooksComplete = false
-        do { hooksComplete = try await HookRunner.run(session: session, transcriptDirectory: directory, options: hooks, shutdown: stop.state) }
+        do { hooksComplete = try await HookRunner.run(session: session, transcriptDirectory: directory, options: hooks, shutdown: stop.state).complete }
         catch { issues.add("Post-session hooks failed: \(error)") }
         for issue in issues.all { diagnostic(issue) }
         diagnostic("Transcript saved to \(directory.path)")

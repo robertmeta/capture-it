@@ -13,6 +13,7 @@ final class VoiceMatchingTests: XCTestCase {
         let spans = voiceExamples(turns)
         XCTAssertEqual(spans["A"], [26..<34, 5..<10, 0..<2])
         XCTAssertTrue((spans["B"] ?? []).isEmpty)
+        XCTAssertEqual(voiceExamples(turns, minimumDuration: 0.05)["B"], [10..<10.5])
     }
 
     func testWeakAmbiguousAndIncompatibleVoicesStayAnonymous() {

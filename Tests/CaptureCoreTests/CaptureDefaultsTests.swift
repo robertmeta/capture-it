@@ -1,3 +1,4 @@
+import CapturePaths
 import Foundation
 import XCTest
 @testable import CaptureCore
@@ -37,6 +38,21 @@ final class CaptureDefaultsTests: XCTestCase {
         XCTAssertEqual(CaptureDefaults.stem("Microsoft Teams", fallback: "other"), "microsoft-teams")
         XCTAssertEqual(CaptureDefaults.stem("../Teams/../../call", fallback: "other"), "teams-..-..-call")
         XCTAssertEqual(CaptureDefaults.stem("*??*", fallback: "Microsoft Teams"), "microsoft-teams")
+    }
+
+    func testCaptureHomeKeepsExistingEnrollmentsAndRespectsExplicitLocations() throws {
+        let user = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: user) }
+        let defaults = CaptureHome(environment: [:], userDirectory: user)
+        XCTAssertEqual(defaults.recordings.path, user.appendingPathComponent("Documents/capture-it/recordings").path)
+        XCTAssertEqual(defaults.voices.path, user.appendingPathComponent("Documents/capture-it/voices").path)
+        let previous = user.appendingPathComponent("Library/Application Support/capture-it/voices")
+        try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+        XCTAssertEqual(CaptureHome(environment: [:], userDirectory: user).voices.path, previous.path)
+        let selected = user.appendingPathComponent("other")
+        let override = CaptureHome(override: selected, environment: ["CAPTURE_IT_HOME": "/ignored"], userDirectory: user)
+        XCTAssertEqual(override.voices.path, selected.appendingPathComponent("voices").path)
+        XCTAssertEqual(CaptureHome(override: selected, environment: ["CAPTURE_IT_VOICES": previous.path]).voices.path, previous.path)
     }
 
     func testDefaultOutputIsLocalDatedAndAvoidsExistingDirectory() throws {

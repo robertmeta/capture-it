@@ -11,6 +11,7 @@ import sys
 import time
 import wave
 from fixtures import start_player
+from speaker_review_journey import saved_review, terminal_command
 
 binary = str(Path(sys.argv[1]).resolve())
 installed = sys.argv[2:] == ["--installed"]
@@ -92,7 +93,7 @@ if installed:
     status = json.loads(subprocess.check_output([binary, "doctor", "--json"], text=True))
     assert Path(status["fluidHook"]).resolve() == hook.resolve()
     command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)"] + command
-result = subprocess.run(command, capture_output=True, text=True, timeout=310)
+result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=310)
 (root / "stderr.txt").write_text(result.stderr)
 assert result.returncode == 0, result.stderr
 assert result.stdout == "", "Hook output leaked into transcript stdout"
@@ -142,10 +143,12 @@ if not installed:
 
 def review(*args, expected=0):
     command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)", str(review_cli), *map(str, args)]
-    checked = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    checked = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90)
     assert checked.returncode == expected, (args, checked.stderr)
     return checked.stdout
 
+
+saved_review(review_cli, session, root)
 
 library = root / "voices"
 assert "No remembered voices" in review("people")
@@ -205,7 +208,7 @@ if installed:
         return json.loads(path.read_text())["results"]
 
     # Explicit selection of the installed helper keeps its place without duplication.
-    check = subprocess.run([binary, "hooks", str(session), "--hook", str(hook)], capture_output=True, text=True, timeout=60)
+    check = subprocess.run([binary, "hooks", str(session), "--hook", str(hook)], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     assert check.returncode == 0 and check.stdout == "", check.stderr
     assert len(latest_report()) == 1 and hashes() == before
 
@@ -217,7 +220,7 @@ if installed:
     assert [p["executable"] for p in latest_report()] == [str(inspector)]
 
     # Run a later hook only after labeled artifacts are durable.
-    check = subprocess.run([binary, "hooks", str(session), "--hook", str(inspector)], capture_output=True, text=True, timeout=60)
+    check = subprocess.run([binary, "hooks", str(session), "--hook", str(inspector)], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     assert check.returncode == 0 and check.stdout == "", check.stderr
     rows = latest_report()
     assert [r["executable"] for r in rows] == [str(hook), str(inspector)]
@@ -229,7 +232,7 @@ if installed:
     shutil.copyfile(session / "recording.wav", audio_only / "recording.wav")
     manifest["transcription"] = "disabled"
     (audio_only / "session.json").write_text(json.dumps(manifest))
-    check = subprocess.run([binary, "hooks", str(audio_only)], capture_output=True, text=True, timeout=60)
+    check = subprocess.run([binary, "hooks", str(audio_only)], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     assert check.returncode == 0 and check.stdout == "", check.stderr
     only_output = Path(latest_report(audio_only)[0]["outputDirectory"])
     assert (only_output / "diarization.json").is_file()
@@ -237,7 +240,7 @@ if installed:
 
     # Missing models fail without downloads and do not damage original artifacts.
     missing = dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(root / "missing models"))
-    check = subprocess.run([binary, "hooks", str(session)], env=missing, capture_output=True, text=True, timeout=15)
+    check = subprocess.run([binary, "hooks", str(session)], env=missing, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
     assert check.returncode == 2 and not (root / "missing models").exists()
     failed = latest_report()[0]
     assert failed["status"] == "failed"
@@ -255,7 +258,7 @@ if installed:
         link.symlink_to((model_directory / item["path"]).resolve())
     model_manifest["files"][0]["sha256"] = "0" * 64
     (corrupted / "setup.json").write_text(json.dumps(model_manifest))
-    check = subprocess.run([str(hook), "--check"], env=dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(corrupted)), capture_output=True, text=True, timeout=15)
+    check = subprocess.run([str(hook), "--check"], env=dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(corrupted)), capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
     assert check.returncode == 1 and "integrity check failed" in check.stderr and "No download attempted" in check.stderr
 
     # A tiny processing timeout must retain the recording and transcript.
@@ -266,7 +269,7 @@ if installed:
     # Standalone hooks is already draining; its first Ctrl-C cancels analysis.
     previous = set(session.glob("hooks/*"))
     with (root / "cancel-stderr.txt").open("w") as errors:
-        child = subprocess.Popen([binary, "hooks", str(session), "--hook", str(inspector)], stdout=subprocess.PIPE, stderr=errors)
+        child = subprocess.Popen([binary, "hooks", str(session), "--hook", str(inspector)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors)
         try:
             deadline = time.monotonic() + 15
             while True:
@@ -291,7 +294,7 @@ if installed:
     captured = root / "captured session"
     try:
         with (root / "capture-stderr.txt").open("w") as errors:
-            child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.fluidcapture", "--out", str(captured)], stdout=subprocess.DEVNULL, stderr=errors)
+            child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.fluidcapture", "--out", str(captured)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors)
             deadline = time.monotonic() + 45
             while True:
                 text = captured / "transcript.txt"
@@ -316,6 +319,18 @@ if installed:
         event = json.loads(event_path.read_text())
         assert event["recordingStatus"] == "complete" and event["transcriptComplete"]
         print("passed: actual app+mic capture prints live speech; first Ctrl-C saves WAV and final text before automatic FluidAudio writes a labeled copy")
+        review_home = root / "record home"
+        review_env = dict(os.environ)
+        review_env.pop("CAPTURE_IT_VOICES", None)
+        review_log = terminal_command([binary, "record", "--app", "com.robertmeta.capture-it.fixture.fluidcapture",
+                                       "--home", str(review_home), "--duration", "10", "--no-transcribe"],
+                                      [(b"Who is ", b":quit\n")], root / "record-review.log", review_env)
+        fresh = next((review_home / "recordings").iterdir())
+        assert "WAV saved" in review_log or "Saved " in review_log
+        assert json.loads((fresh / "session.json").read_text())["recording"] == "complete"
+        assert next(fresh.glob("hooks/*/*/diarization.json")).is_file()
+        assert not (review_home / "voices").exists()
+        print("passed: real capture automatically saved under its home and entered cancellable voice review")
     finally:
         if child is not None and child.poll() is None:
             child.kill(); child.wait()

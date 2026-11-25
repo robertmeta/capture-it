@@ -14,11 +14,11 @@ capture-it teams --hook ./examples/hooks/inspect-session.py
 capture-it teams --hook ./my-diarizer --hook ./my-notes --hook-timeout 900
 
 # Run again on existing audio without recording or re-transcribing.
-capture-it hooks ./teams-20261117-143000 --hook ./my-notes
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000 --hook ./my-notes
 
 # Use the new text after retrying transcription.
-capture-it transcribe ./teams-20261117-143000 --out ./retry-text --hook ./my-notes
-capture-it hooks ./teams-20261117-143000 --transcript ./retry-text --hook ./my-notes
+capture-it transcribe ~/Documents/capture-it/recordings/teams-20261117-143000 --out ./retry-text --hook ./my-notes
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000 --transcript ./retry-text --hook ./my-notes
 ```
 
 Each `--hook` names an executable file, such as a script with a shebang.

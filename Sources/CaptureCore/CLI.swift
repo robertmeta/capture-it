@@ -1,3 +1,4 @@
+import CapturePaths
 import AVFoundation
 import Foundation
 
@@ -17,17 +18,21 @@ public enum CLI {
       capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
 
       capture-it people                         # remembered names and sample counts
-      capture-it speakers SESSION_DIRECTORY [--run UUID/NNN]
+      capture-it speakers SESSION_DIRECTORY [--list] [--run UUID/NNN]
       capture-it speakers SESSION_DIRECTORY --listen SPEAKER_ID
       capture-it speakers SESSION_DIRECTORY --assign SPEAKER_ID --name "Joe Smith"
 
     Naming a speaker saves local voice samples for recognition in future recordings.
-    The speaker list shows IDs, names and example times after FluidAudio finishes.
+    After record or hooks, a foreground terminal plays unmatched voices for naming.
+    Enter skips, :quit finishes, and speakers SESSION resumes. --list prints the IDs.
+    Use --home with record, transcribe, hooks, speakers or people.
 
     Record options:
       --app NAME_OR_PATTERN  Name/bundle substring or quoted * / ? wildcard
                              One match auto-selects; multiple matches prompt
-      --out DIRECTORY        Default: ./SEARCH-yyyyMMdd-HHmmss (new session folder)
+      --home DIRECTORY       Default: ~/Documents/capture-it (or CAPTURE_IT_HOME)
+      --out DIRECTORY        Exact session folder; default: HOME/recordings/SEARCH-yyyyMMdd-HHmmss
+      --no-review            Skip the interactive speaker prompts after analysis
       --mic DEVICE_UID       Override app input detection / system-default fallback
       --locale LOCALE        Default: en-US
       --duration SECONDS     Stop automatically; otherwise q or Ctrl-C stops and saves
@@ -61,6 +66,8 @@ public enum CLI {
         let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks", "speakers", "people"]
         let command = commands.contains(first) ? first : "record"
         let args = try Arguments(commands.contains(first) ? Array(arguments.dropFirst()) : arguments)
+        if args.values["--home"] == "" { throw CaptureError.message("--home needs a directory") }
+        let home = args.values["--home"].map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
         switch command {
         case "setup-accessibility":
             try args.validate(allowed: [])
@@ -112,15 +119,22 @@ public enum CLI {
         case "people", "speakers":
             let helperArguments: [String]
             if command == "people" {
-                try args.validate(allowed: [])
+                try args.validate(allowed: ["--home"])
                 helperArguments = ["--people"]
             } else {
-                try args.validate(allowed: ["--run", "--listen", "--assign", "--name"], positionals: 1...1)
+                try args.validate(allowed: ["--home", "--run", "--list", "--listen", "--assign", "--name"], positionals: 1...1)
                 let assign = args.values["--assign"]
                 let listen = args.values["--listen"]
                 guard (assign == nil) == (args.values["--name"] == nil), assign == nil || listen == nil,
-                      assign != "", listen != "" else {
+                      assign != "", listen != "", !(args.flags.contains("--list") && (assign != nil || listen != nil)) else {
                     throw CaptureError.message("Use --listen ID or --assign ID --name NAME")
+                }
+                if assign == nil, listen == nil, !args.flags.contains("--list"), HookRunner.foregroundTerminal {
+                    // Keep the parent alive when Ctrl-C ends the foreground dialogue.
+                    let stop = StopSignal()
+                    defer { withExtendedLifetime(stop) {} }
+                    try HookRunner.review(session: URL(fileURLWithPath: args.positionals[0]), run: args.values["--run"] ?? "", home: home)
+                    return 0
                 }
                 helperArguments = ["--speakers", args.positionals[0], args.values["--run"] ?? "",
                                    assign ?? listen ?? ""] + (args.values["--name"].map { [$0] } ?? [])
@@ -131,12 +145,17 @@ public enum CLI {
             let process = Process()
             process.executableURL = helper
             process.arguments = helperArguments
+            if let home {
+                var environment = ProcessInfo.processInfo.environment
+                environment["CAPTURE_IT_HOME"] = home.path
+                process.environment = environment
+            }
             try process.run()
             process.waitUntilExit()
             return process.terminationStatus
         case "record":
-            try args.validate(allowed: ["--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
-            let hooks = try args.hookOptions()
+            try args.validate(allowed: ["--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
+            let hooks = try args.hookOptions(home: home)
             if let title = args.values["--title"], MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
             guard args.values["--app"] == nil || args.positionals.isEmpty else { throw CaptureError.message("Use either a positional app name or --app, not both") }
             guard let app = args.values["--app"] ?? args.positionals.first else { throw CaptureError.message("Choose an app: capture-it teams, or capture-it record --app NAME") }
@@ -146,18 +165,21 @@ public enum CLI {
                 duration = value
             }
             let selected = try await AppSelection.resolve(app)
-            let output = args.values["--out"].map { URL(fileURLWithPath: $0) } ?? CaptureDefaults.output(query: app, appName: selected.name)
+            let output = args.values["--out"].map { URL(fileURLWithPath: $0) } ?? CaptureDefaults.output(query: app, appName: selected.name, directory: CaptureHome(override: home).recordings)
             return try await Sessions.record(RecordOptions(app: selected.bundleID, output: output, microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US", transcribe: !args.flags.contains("--no-transcribe"), duration: duration, processID: selected.pid, hooks: hooks, title: args.values["--title"]))
         case "transcribe":
-            try args.validate(allowed: ["--out", "--locale", "--no-fluid", "--hook", "--hook-timeout"], positionals: 1...1)
-            let hooks = try args.hookOptions()
+            try args.validate(allowed: ["--home", "--out", "--locale", "--no-fluid", "--hook", "--hook-timeout"], positionals: 1...1)
+            let hooks = try args.hookOptions(home: home)
             return try await Sessions.transcribe(session: URL(fileURLWithPath: args.positionals[0]), output: args.values["--out"].map { URL(fileURLWithPath: $0) }, locale: args.values["--locale"] ?? "en-US", hooks: hooks)
         case "hooks":
-            try args.validate(allowed: ["--hook", "--hook-timeout", "--transcript", "--no-fluid"], positionals: 1...1)
-            let hooks = try args.hookOptions(required: true)
+            try args.validate(allowed: ["--home", "--no-review", "--hook", "--hook-timeout", "--transcript", "--no-fluid"], positionals: 1...1)
+            let hooks = try args.hookOptions(home: home, required: true)
             let stop = StopSignal()
             stop.state.beginDraining()
-            return try await HookRunner.run(session: URL(fileURLWithPath: args.positionals[0]), transcriptDirectory: args.values["--transcript"].map { URL(fileURLWithPath: $0) }, options: hooks, shutdown: stop.state) ? 0 : 2
+            let session = URL(fileURLWithPath: args.positionals[0])
+            let run = try await HookRunner.run(session: session, transcriptDirectory: args.values["--transcript"].map { URL(fileURLWithPath: $0) }, options: hooks, shutdown: stop.state)
+            try HookRunner.reviewIfInteractive(session: session, run: run.speakerRun, options: hooks, shutdown: stop.state)
+            return run.complete ? 0 : 2
         default: throw CaptureError.message("Unknown command \(command). Run capture-it --help.")
         }
         return 0
@@ -185,7 +207,7 @@ private struct Arguments {
                     hooks.append(arguments[index]); index += 1; continue
                 }
                 guard values[value] == nil, !flags.contains(value) else { throw CaptureError.message("Repeated option \(value)") }
-                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" { flags.insert(value) }
+                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" || value == "--list" || value == "--no-review" { flags.insert(value) }
                 else {
                     index += 1
                     guard index < arguments.count, !arguments[index].hasPrefix("--") else { throw CaptureError.message("Missing value for \(value)") }
@@ -201,7 +223,7 @@ private struct Arguments {
         guard count.contains(positionals.count) else { throw CaptureError.message("Expected \(count) positional argument(s). Run capture-it --help.") }
     }
 
-    func hookOptions(required: Bool = false) throws -> HookOptions {
+    func hookOptions(home: URL?, required: Bool = false) throws -> HookOptions {
         var executables = hooks.map { URL(fileURLWithPath: $0).standardizedFileURL }
         let fluid = flags.contains("--no-fluid") ? nil : InstalledHooks.fluid()
         if let fluid, !executables.contains(where: { $0.resolvingSymlinksInPath() == fluid.resolvingSymlinksInPath() }) {
@@ -212,7 +234,9 @@ private struct Arguments {
         }
         let raw = values["--hook-timeout"] ?? (fluid == nil ? "300" : "900")
         guard let timeout = Double(raw) else { throw CaptureError.message("--hook-timeout must be a positive finite number") }
-        let options = HookOptions(executables: executables, timeout: timeout)
+        var options = HookOptions(executables: executables, timeout: timeout)
+        options.home = home
+        options.promptForSpeakers = !flags.contains("--no-review")
         try options.validate()
         return options
     }

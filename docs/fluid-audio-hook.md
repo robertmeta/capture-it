@@ -54,10 +54,10 @@ capture-it teams
 capture-it teams --no-fluid       # skip automatic labels for this recording
 
 # Process an existing session.
-capture-it hooks ./teams-20261117-143000
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000
 
 # Use a retried transcript.
-capture-it hooks ./teams-20261117-143000 --transcript ./retry-text \
+capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000 --transcript ./retry-text \
   --hook-timeout 900
 
 # Checkout CLI without an installed sibling helper:
@@ -124,7 +124,15 @@ speaker turns, a later alignment stage would be needed.
 
 ## Remembered voices
 
-`capture-it speakers SESSION` lists each ID, its current name, and example times.
+After recording or running `capture-it hooks SESSION`, a foreground terminal
+reviews the completed run. It skips assigned and voice-matched IDs, plays a clip
+of each remaining voice with an isolated sample, and asks for a name. Enter
+skips a speaker, while `:quit`, Ctrl-D at an empty prompt, or Ctrl-C ends review.
+Confirmed assignments persist. Scripts with piped input never prompt.
+`--no-review` on record or hooks skips this dialogue.
+
+Use `capture-it speakers SESSION` to resume. Use `--list` for IDs, names and
+example times, including speakers with too little isolated speech for playback.
 Use `--listen ID` to hear the longest isolated example. Use `--assign ID --name
 "Joe Smith"` to label every turn assigned to that ID, update the readable
 speaker transcript, and enroll Joe for future calls. If the session has several
@@ -139,9 +147,12 @@ Assigning a different name corrects that enrollment and its recording. Use a
 distinguishing name for people who share a full name.
 
 `capture-it people` lists remembered names and sample counts. Private
-`.voice` folders under `~/Library/Application Support/capture-it/voices`
+`.voice` folders under `~/Documents/capture-it/voices` by default
 contain playable mono WAVs and their names and model-specific embeddings.
-`CAPTURE_IT_VOICES` selects an alternate local library for both enrollment
+An existing default library at `~/Library/Application Support/capture-it/voices`
+remains active until a custom home or library is selected. `--home` or
+`CAPTURE_IT_HOME` selects a home containing `recordings/` and `voices/`.
+`CAPTURE_IT_VOICES` selects an exact library for both enrollment
 and recognition. The assignment prints its folder path. Removing one of these
 folders forgets its examples for future processing.
 

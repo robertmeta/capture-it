@@ -1,3 +1,4 @@
+import CapturePaths
 import AVFoundation
 import Foundation
 
@@ -12,7 +13,7 @@ enum CaptureDefaults {
         return !search.isEmpty ? search : (!sanitize(fallback).isEmpty ? sanitize(fallback) : "capture")
     }
 
-    static func output(query: String, appName: String, directory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath), date: Date = Date(), timeZone: TimeZone = .current) -> URL {
+    static func output(query: String, appName: String, directory: URL = CaptureHome().recordings, date: Date = Date(), timeZone: TimeZone = .current) -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone

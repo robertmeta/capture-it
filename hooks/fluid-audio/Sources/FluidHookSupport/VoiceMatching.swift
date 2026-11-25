@@ -1,8 +1,8 @@
 import Foundation
 
 /// Pick up to three distinct intervals with only one active speaker, longest first.
-/// The model gets at least two seconds of speech and a maximum of eight per clip.
-public func voiceExamples(_ turns: [SpeakerTurn]) -> [String: [Range<Double>]] {
+/// Enrollment requires two seconds. Playback may request shorter clips.
+public func voiceExamples(_ turns: [SpeakerTurn], minimumDuration: Double = 2) -> [String: [Range<Double>]] {
     struct Edge { let time: Double; let id: String; let delta: Int }
     let edges = turns.filter { $0.start >= 0 && $0.end.isFinite && $0.end > $0.start }.flatMap {
         [Edge(time: $0.start, id: $0.speaker, delta: 1), Edge(time: $0.end, id: $0.speaker, delta: -1)]
@@ -24,7 +24,7 @@ public func voiceExamples(_ turns: [SpeakerTurn]) -> [String: [Range<Double>]] {
         previous = edge.time
     }
     return spans.mapValues { intervals in
-        let eligible = intervals.filter { $0.upperBound - $0.lowerBound >= 2 }
+        let eligible = intervals.filter { $0.upperBound - $0.lowerBound >= minimumDuration }
         let longest = eligible.sorted { left, right in
             let a = left.upperBound - left.lowerBound
             let b = right.upperBound - right.lowerBound

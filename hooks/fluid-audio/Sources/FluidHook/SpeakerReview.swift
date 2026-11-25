@@ -1,3 +1,4 @@
+import CapturePaths
 import AVFoundation
 import CryptoKit
 import Darwin
@@ -18,12 +19,7 @@ private struct Enrollment: Codable {
 
 enum SpeakerReview {
     private static var files: FileManager { .default }
-    private static var library: URL {
-        if let path = ProcessInfo.processInfo.environment["CAPTURE_IT_VOICES"], !path.isEmpty {
-            return URL(fileURLWithPath: path, isDirectory: true)
-        }
-        return files.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/capture-it/voices")
-    }
+    private static var library: URL { CaptureHome().voices }
 
     static func references(revision: String) throws -> [String: [[Float]]] {
         var people: [String: [[Float]]] = [:]
@@ -72,12 +68,37 @@ enum SpeakerReview {
         return try JSONDecoder().decode([String: Identity].self, from: Data(contentsOf: url))
     }
 
-    static func review(session: URL, run: String, speaker: String, name: String?, revision: String,
+    static func review(session: URL, run: String, interactive: Bool, speaker: String, name: String?, revision: String,
                        makeManager: () throws -> OfflineDiarizerManager) async throws {
         let output = try select(session: session, run: run)
         let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: output.appendingPathComponent("diarization.json")))
         guard report.version == 1 else { throw HookFailure("Unsupported diarization report version") }
-        let examples = voiceExamples(report.turns)
+        let examples = voiceExamples(report.turns, minimumDuration: 0.05)
+        let wav = session.appendingPathComponent("recording.wav")
+        if interactive {
+            let terminal = try SpeakerTerminal()
+            let matched = try identities(in: output)
+            let unknown = report.speakers.filter { matched[$0] == nil }
+            if unknown.isEmpty {
+                print(report.speakers.isEmpty ? "No speakers detected." : "All speakers already have names.")
+                return
+            }
+            print("Reviewing \(unknown.count) unnamed speaker(s). Enter skips one. :quit or Ctrl-C ends review.")
+            for id in unknown {
+                guard !terminal.cancelled else { break }
+                guard let spans = examples[id], let first = spans.first else {
+                    print("\(id) has no isolated sample. Use --assign to name this speaker manually.")
+                    continue
+                }
+                print("Playing \(id)…")
+                try play(wav: wav, span: first, terminal: terminal)
+                guard !terminal.cancelled, let answer = try terminal.name(for: id), answer != ":quit" else { break }
+                if answer.isEmpty { continue }
+                try await assign(answer, speaker: id, output: output, wav: wav, spans: spans, revision: revision, makeManager: makeManager)
+            }
+            print("Review finished. You can resume with capture-it speakers and this session path.")
+            return
+        }
         if speaker.isEmpty && name == nil {
             let labels = try identities(in: output)
             for id in report.speakers {
@@ -89,54 +110,61 @@ enum SpeakerReview {
         }
         guard report.speakers.contains(speaker) else { throw HookFailure("Unknown speaker ID. List speakers first.") }
         let spans = examples[speaker] ?? []
-        let wav = session.appendingPathComponent("recording.wav")
         if let name {
-            let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !clean.isEmpty, clean.rangeOfCharacter(from: .controlCharacters) == nil else { throw HookFailure("Enter a nonempty, single-line name") }
-            // Serialize enrollment and its transcript projection across concurrent CLI invocations on this run.
-            let fd = open(output.path, O_RDONLY)
-            guard fd >= 0 else { throw HookFailure("Cannot open speaker analysis directory") }
-            defer { close(fd) }
-            guard flock(fd, LOCK_EX) == 0 else { throw HookFailure("Cannot lock speaker analysis") }
-            let key = [output.deletingLastPathComponent().lastPathComponent, output.lastPathComponent, speaker].joined(separator: "/")
-            let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-            let destination = library.appendingPathComponent(digest + ".voice")
-            if !spans.isEmpty {
-                try await enroll(clean, wav: wav, spans: spans, destination: destination, revision: revision, makeManager: makeManager)
-            }
-            var labels = try identities(in: output)
-            labels[speaker] = Identity(name: clean, source: "assigned")
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(labels).write(to: output.appendingPathComponent("speaker-identities.json"), options: .atomic)
-            let jsonl = output.appendingPathComponent("speaker-transcript.jsonl")
-            if files.fileExists(atPath: jsonl.path) {
-                let names = labels.mapValues(\.name)
-                let lines = try String(contentsOf: jsonl, encoding: .utf8).split(separator: "\n")
-                var text = ""
-                for line in lines {
-                    let phrase = try JSONDecoder().decode(AttributedPhrase.self, from: Data(line.utf8))
-                    guard phrase.phrase.start.isFinite, phrase.phrase.start >= 0, phrase.phrase.start < Double(Int.max) else {
-                        throw HookFailure("Invalid phrase timestamp in speaker-transcript.jsonl")
-                    }
-                    text += PhraseAttribution.line(phrase, names: names)
-                }
-                try Data(text.utf8).write(to: output.appendingPathComponent("speaker-transcript.txt"), options: .atomic)
-            }
-            print("\(speaker) → \(clean)")
-            print(spans.isEmpty ? "Assigned in this recording only. Enrollment needs two seconds of isolated speech." : "Voice samples: \(destination.path)")
+            try await assign(name, speaker: speaker, output: output, wav: wav, spans: spans, revision: revision, makeManager: makeManager)
         } else {
-            guard let first = spans.first else { throw HookFailure("No isolated two-second voice sample to play.") }
-            let temp = files.temporaryDirectory.appendingPathComponent("capture-it-\(UUID().uuidString).wav")
-            defer { try? files.removeItem(at: temp) }
-            try AnalysisAudio.prepare(wav: wav, destination: temp, interval: first)
-            let player = Process()
-            player.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-            player.arguments = [temp.path]
-            try player.run()
-            player.waitUntilExit()
-            guard player.terminationStatus == 0 else { throw HookFailure("Voice sample playback failed") }
+            guard let first = spans.first else { throw HookFailure("No isolated voice sample to play.") }
+            try play(wav: wav, span: first)
         }
+    }
+
+    private static func assign(_ name: String, speaker: String, output: URL, wav: URL, spans: [Range<Double>],
+                               revision: String, makeManager: () throws -> OfflineDiarizerManager) async throws {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, clean.rangeOfCharacter(from: .controlCharacters) == nil else { throw HookFailure("Enter a nonempty, single-line name") }
+        // Serialize enrollment and its transcript projection across concurrent CLI invocations on this run.
+        let fd = open(output.path, O_RDONLY)
+        guard fd >= 0 else { throw HookFailure("Cannot open speaker analysis directory") }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { throw HookFailure("Cannot lock speaker analysis") }
+        let key = [output.deletingLastPathComponent().lastPathComponent, output.lastPathComponent, speaker].joined(separator: "/")
+        let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        let destination = library.appendingPathComponent(digest + ".voice")
+        let enrollmentSpans = spans.filter { $0.upperBound - $0.lowerBound >= 2 }
+        if !enrollmentSpans.isEmpty {
+            try await enroll(clean, wav: wav, spans: enrollmentSpans, destination: destination, revision: revision, makeManager: makeManager)
+        }
+        var labels = try identities(in: output)
+        labels[speaker] = Identity(name: clean, source: "assigned")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(labels).write(to: output.appendingPathComponent("speaker-identities.json"), options: .atomic)
+        let jsonl = output.appendingPathComponent("speaker-transcript.jsonl")
+        if files.fileExists(atPath: jsonl.path) {
+            let names = labels.mapValues(\.name)
+            let lines = try String(contentsOf: jsonl, encoding: .utf8).split(separator: "\n")
+            var text = ""
+            for line in lines {
+                let phrase = try JSONDecoder().decode(AttributedPhrase.self, from: Data(line.utf8))
+                guard phrase.phrase.start.isFinite, phrase.phrase.start >= 0, phrase.phrase.start < Double(Int.max) else {
+                    throw HookFailure("Invalid phrase timestamp in speaker-transcript.jsonl")
+                }
+                text += PhraseAttribution.line(phrase, names: names)
+            }
+            try Data(text.utf8).write(to: output.appendingPathComponent("speaker-transcript.txt"), options: .atomic)
+        }
+        print("\(speaker) → \(clean)")
+        print(enrollmentSpans.isEmpty ? "Assigned in this recording only. Enrollment needs two seconds of isolated speech." : "Voice samples: \(destination.path)")
+    }
+
+    private static func play(wav: URL, span: Range<Double>, terminal: SpeakerTerminal? = nil) throws {
+        let temp = files.temporaryDirectory.appendingPathComponent("capture-it-\(UUID().uuidString).wav")
+        defer { try? files.removeItem(at: temp) }
+        try AnalysisAudio.prepare(wav: wav, destination: temp, interval: span)
+        let player = try AVAudioPlayer(contentsOf: temp)
+        guard player.play() else { throw HookFailure("Voice sample playback failed") }
+        defer { player.stop() }
+        while player.isPlaying && terminal?.cancelled != true { Thread.sleep(forTimeInterval: 0.05) }
     }
 
     private static func enroll(_ name: String, wav: URL, spans: [Range<Double>], destination: URL,

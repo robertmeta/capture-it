@@ -8,7 +8,8 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [.executable(name: "capture-it", targets: ["CaptureIt"])],
     targets: [
-        .target(name: "CaptureCore"),
+        .target(name: "CaptureCore", dependencies: ["CapturePaths"]),
+        .target(name: "CapturePaths", path: "hooks/fluid-audio/Sources/CapturePaths"),
         .target(name: "FluidHookSupport", path: "hooks/fluid-audio/Sources/FluidHookSupport"),
         .executableTarget(
             name: "CaptureIt", dependencies: ["CaptureCore"],

@@ -102,7 +102,7 @@ final class Issues: @unchecked Sendable {
 }
 
 func privateDirectory(_ url: URL) throws {
-    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     guard mkdir(url.path, 0o700) == 0 else {
         throw CaptureError.message("Cannot create new session \(url.path): \(String(cString: strerror(errno))). Choose a new output directory.")
     }
@@ -162,4 +162,4 @@ struct Manifest: Codable {
     var meeting: MeetingMetadata? = nil
 }
 
-public let captureItVersion = "0.3.2"
+public let captureItVersion = "0.4.0"
