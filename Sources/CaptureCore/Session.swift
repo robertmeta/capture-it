@@ -14,6 +14,9 @@ public struct RecordOptions: Sendable {
     public var processID: pid_t?
     public var hooks: HookOptions
     public var title: String?
+    var targets: [AppChoice] = []
+    var meetingStem: String?
+    var numberFirstMeeting = false
     public init(app: String, output: URL, microphone: String? = nil, locale: String = "en-US", transcribe: Bool = true, duration: Double? = nil, processID: pid_t? = nil, hooks: HookOptions = HookOptions(), title: String? = nil) {
         self.app = app; self.output = output; self.microphone = microphone
         self.locale = locale; self.transcribe = transcribe; self.duration = duration
@@ -25,12 +28,17 @@ public struct RecordOptions: Sendable {
 
 final class StopSignal: @unchecked Sendable {
     let state = ShutdownState()
+    let received = Atomic<Int32>(0)
     private var sources: [DispatchSourceSignal] = []
     init() {
         for number in [SIGINT, SIGTERM] {
             signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global(qos: .userInitiated))
-            source.setEventHandler { [weak self] in self?.state.request(count: source.data) }
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                if !state.requested { received.store(number, ordering: .releasing) }
+                state.request(count: source.data)
+            }
             source.resume(); sources.append(source)
         }
     }
@@ -51,199 +59,146 @@ public enum Sessions {
     public static func record(_ options: RecordOptions) async throws -> Int32 {
         try options.hooks.validate()
         let stop = StopSignal()
+        let nextMeeting = Atomic<Bool>(false)
         var keys: RecordingKeys?
-        defer { keys?.stop() }
-        let resolved = try Hardware.resolveApp(options.app, processID: options.processID)
+        defer { keys?.stop(); withExtendedLifetime(stop) {} }
         if let title = options.title, MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
-        let selectedPID = options.processID ?? resolved.first(where: { $0.bundleID == options.app })?.pid
-        let appName = selectedPID.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName } ?? options.app
-        let meeting = MeetingObserver(pid: selectedPID, appName: appName, title: options.title)
-        defer { meeting.stop() }
-        let micSelection = try Hardware.selectMicrophone(explicitUID: options.microphone, bundle: options.app, processID: options.processID)
-        let microphone = micSelection.device
-        diagnostic("Microphone: \(microphone.name) (\(micSelection.reason))")
-        try privateDirectory(options.output)
-        let issues = Issues()
-        var manifest = Manifest(app: options.app, microphone: microphone.uid, locale: options.locale)
-        if !options.transcribe { manifest.transcription = "disabled" }
-        manifest.channelLayout = RecordingFormat.channels
-        manifest.selectedProcessID = options.processID
-        manifest.microphoneSelection = micSelection.source
-        manifest.microphoneNote = micSelection.reason
-        manifest.meeting = meeting.snapshot
-        let manifestURL = options.output.appendingPathComponent("session.json")
-        try atomicJSON(manifest, at: manifestURL)
+        let targets = options.targets.isEmpty ? [AppChoice(name: options.app, bundleID: options.app, pid: options.processID ?? 0)] : options.targets
+        let microphone = try Hardware.selectMicrophone(explicitUID: options.microphone, targets: targets)
+        diagnostic("Microphone: \(microphone.device.name) (\(microphone.reason))")
+        let primary = targets.count == 1 ? targets.first : nil
+        var observer = MeetingObserver(target: primary, title: options.title)
+        defer { observer.stop() }
         let epoch = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+        var meeting = try MeetingRecording(options: options, targets: targets, microphone: microphone, epoch: epoch, meeting: observer.snapshot, first: true)
         let inputs = Source.inputs.map { CaptureInput(source: $0, epoch: epoch) }
-        let outputLane = AudioLane(source: .recording, directory: options.output, epoch: epoch, issues: issues)
-        let lanes = [outputLane]
-        let assembler = ChannelAssembler(inputs: inputs, output: outputLane, epoch: epoch, issues: issues)
-        var recognizers: [RecognitionWorker] = []
-        var tee: TranscriptTee?
-        var appCapture: NativeCapture?
-        var captureFailed = false
-        var warned: Set<String> = []
-
+        func counters() -> [String: Int64] {
+            Dictionary(uniqueKeysWithValues: inputs.map { ($0.source.rawValue, $0.receivedFrames.load(ordering: .acquiring)) })
+        }
+        var baseline = counters()
+        func frames() -> [String: Int64] {
+            var result = counters()
+            for (key, initial) in baseline { result[key, default: 0] -= initial }
+            return result
+        }
+        let engineIssues = Issues()
+        let assembler = ChannelAssembler(inputs: inputs, output: meeting.lane, epoch: epoch, issues: engineIssues)
+        let capture = NativeCapture(targets: targets, microphone: microphone.device, lane: inputs[0], micLane: inputs[1])
+        var started = false
+        var failed = false
+        var processing: Task<ProcessedMeeting, Never>?
+        var reason = "quit"
         do {
-            await authorizeAndReport(microphone: microphone)
+            await authorizeAndReport(microphone: microphone.device)
             try await MicrophoneAccess.authorize()
             if stop.state.requested { throw CaptureError.message("Stopped before recording began") }
-            let app = try NativeCapture(bundle: options.app, microphone: microphone, lane: inputs[0], micLane: inputs[1], processID: options.processID)
             diagnostic("Starting selected-app audio capture; allow macOS Screen & System Audio Recording access if prompted")
-            let filter = try await app.prepare()
+            let filter = try await capture.prepare()
             if stop.state.requested { throw CaptureError.message("Stopped before recording began") }
-            if options.transcribe {
-                let status = await LocalSpeech.status(locale: options.locale)
-                if status.ready {
-                    let output = try TranscriptTee(directory: options.output, issues: issues)
-                    output.start(); tee = output
-                    for lane in lanes {
-                        let worker = RecognitionWorker(lane: lane, locale: Locale(identifier: status.locale), tee: output, issues: issues)
-                        recognizers.append(worker)
-                        do { try await worker.start() }
-                        catch { issues.add("\(lane.source.rawValue) speech startup failed: \(error)"); worker.cancel() }
-                    }
-                    manifest.transcription = recognizers.contains(where: \.hasFailed) ? "incomplete" : "running"
-                } else {
-                    manifest.transcription = "unavailable"
-                    issues.add("Local speech unavailable for \(options.locale): \(status.assets). Recording audio only; no model was downloaded.")
-                }
-            }
-
-            for lane in lanes { lane.startWriter() }
+            try await meeting.start(options: options)
             assembler.start()
-            try await app.start(filter: filter)
-            appCapture = app
-            manifest.recording = "recording"
-            try atomicJSON(manifest, at: manifestURL)
-            keys = RecordingKeys(shutdown: stop.state)
-            diagnostic("Recording \(options.app) + \(microphone.name) → \(options.output.path)")
-            diagnostic("Transcription: \(manifest.transcription). \(keys == nil ? "Ctrl-C" : "q or Ctrl-C") saves audio and finishes transcription/hooks; Ctrl-C again cancels remaining processing.")
-            if let title = meeting.snapshot.title { diagnostic("Title (\(meeting.snapshot.source ?? "unknown")): \(title)") }
-            else if meeting.snapshot.status == "permission-required" { diagnostic("Meeting title unavailable: allow Accessibility with setup-accessibility, or supply --title") }
-            let began = Date()
+            try await capture.start(filter: filter)
+            started = true
+            meeting.manifest.recording = "recording"
+            try meeting.save()
+            keys = RecordingKeys(shutdown: stop.state) { nextMeeting.store(true, ordering: .releasing) }
+            diagnostic("Recording \(targets.map(\.name).joined(separator: " + ")) + \(microphone.device.name) → \(meeting.directory.path)")
+            diagnostic("Transcription: \(meeting.manifest.transcription). \(keys == nil ? "Ctrl-C saves and quits" : "[q] Quit   [n] New meeting"). Ctrl-C again during shutdown cancels processing.")
+            if let title = observer.snapshot.title { diagnostic("Title (\(observer.snapshot.source ?? "unknown")): \(title)") }
+            else if observer.snapshot.status == "permission-required" { diagnostic("Meeting title unavailable: allow Accessibility with setup-accessibility, or supply --title") }
+            let began = ContinuousClock.now
             var lastCheck = Date.distantPast
             while !stop.state.requested {
-                if let duration = options.duration, Date().timeIntervalSince(began) >= duration { break }
-                if assembler.failed.load(ordering: .acquiring) { throw CaptureError.message("Audio channel assembly failed; recording stopped") }
+                if let duration = options.duration, began.duration(to: .now) >= .seconds(duration) { reason = "duration"; break }
+                if assembler.failed.load(ordering: .acquiring) { throw CaptureError.message(engineIssues.all.last ?? "Audio channel assembly failed") }
                 for input in inputs where input.overflow.load(ordering: .acquiring) || input.copyFailure.load(ordering: .acquiring) {
                     throw CaptureError.message("\(input.source.rawValue) capture could not preserve every audio buffer; recording stopped")
                 }
-                for lane in lanes {
-                    if lane.recordingOverflow.load(ordering: .acquiring) || lane.copyFailure.load(ordering: .acquiring) {
-                        throw CaptureError.message("\(lane.source.rawValue) capture could not persist every audio buffer; recording stopped")
-                    }
-                    if lane.speechOverflow.load(ordering: .acquiring) {
-                        issues.add("\(lane.source.rawValue) speech queue filled; transcript incomplete, audio recording continues")
-                        manifest.transcription = "incomplete"
-                    }
+                if meeting.lane.recordingOverflow.load(ordering: .acquiring) || meeting.lane.copyFailure.load(ordering: .acquiring) {
+                    throw CaptureError.message("Recording could not persist every audio buffer; recording stopped")
                 }
                 if Date().timeIntervalSince(lastCheck) >= 1 {
-                    try app.refresh()
-                    if recognizers.contains(where: \.hasFailed) || tee?.hasFailed == true { manifest.transcription = "incomplete" }
-                    manifest.chunks = lanes.flatMap(\.chunks)
-                    manifest.inputFrames = Dictionary(uniqueKeysWithValues: inputs.map { ($0.source.rawValue, $0.receivedFrames.load(ordering: .acquiring)) })
-                    manifest.issues = issues.all
-                    manifest.meeting = meeting.snapshot
-                    try atomicJSON(manifest, at: manifestURL)
-                    for issue in manifest.issues where warned.insert(issue).inserted { diagnostic(issue) }
+                    try await capture.refresh()
+                    try meeting.checkpoint(meeting: observer.snapshot, frames: frames())
                     lastCheck = Date()
+                }
+                let savedFrames = meeting.lane.chunks.first?.frames ?? 0
+                let rollover = CaptureDefaults.needsRollover(frames: savedFrames)
+                if savedFrames > 0 && (nextMeeting.exchange(false, ordering: .acquiringAndReleasing) || rollover) {
+                    let next = try MeetingRecording(options: options, targets: targets, microphone: microphone, epoch: epoch, meeting: observer.snapshot, first: false)
+                    do { try await next.start(options: options) }
+                    catch {
+                        next.lane.finishCapture()
+                        next.manifest.stopReason = "startup-error"
+                        next.issues.add(String(describing: error))
+                        _ = try await next.finish(started: false, failed: true, shutdown: stop.state)
+                        throw error
+                    }
+                    let boundary = counters()
+                    assembler.rotate(to: next.lane)
+                    let prior = meeting
+                    prior.manifest.stopReason = rollover ? "wav-rollover" : "new-meeting"
+                    prior.manifest.inputFrames = boundary
+                    for (key, initial) in baseline { prior.manifest.inputFrames?[key, default: 0] -= initial }
+                    prior.manifest.meeting = observer.snapshot
+                    processing = processMeeting(prior, started: true, failed: false, hooks: options.hooks, shutdown: stop.state, after: processing)
+                    baseline = boundary
+                    meeting = next
+                    observer.stop()
+                    observer = MeetingObserver(target: primary, title: options.title)
+                    meeting.manifest.recording = "recording"
+                    try meeting.save()
+                    diagnostic("New meeting → \(meeting.directory.path). Processing \(prior.directory.lastPathComponent) in the background.")
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
         } catch {
-            captureFailed = true
-            let issue = String(describing: error)
-            issues.add(issue)
-            if warned.insert(issue).inserted { diagnostic(issue) }
+            failed = true; reason = "capture-error"
+            meeting.issues.add(String(describing: error))
         }
 
-        // Stop producers before closing their SPSC queues. WAV closes independently
-        // of model finalization, stdout and transcript file drains.
         stop.state.beginDraining()
-        if let appCapture {
+        if started {
             diagnostic("Stopping capture and saving WAV…")
-            manifest.recording = "stopping"
-            manifest.issues = issues.all
-            manifest.chunks = lanes.flatMap(\.chunks)
-            try atomicJSON(manifest, at: manifestURL)
-            let stopped = Atomic<Int>(0)
+            meeting.manifest.recording = "stopping"
+            do { try meeting.save() } catch { failed = true; meeting.issues.add("Cannot checkpoint stopping capture: \(error)") }
+            let stopped = Atomic<Bool>(false)
+            let last = meeting
             Task {
-                do { try await appCapture.stop() }
-                catch { issues.add("App audio shutdown failed: \(error)") }
-                stopped.add(1, ordering: .releasing)
+                do { try await capture.stop() } catch { last.issues.add("App audio shutdown failed: \(error)") }
+                stopped.store(true, ordering: .releasing)
             }
-            let stopDeadline = Date().addingTimeInterval(3)
-            while stopped.load(ordering: .acquiring) < 1, Date() < stopDeadline { try? await Task.sleep(for: .milliseconds(20)) }
-            if stopped.load(ordering: .acquiring) < 1 {
-                captureFailed = true; issues.add("Native audio shutdown timed out; audio files will be closed and the process will exit")
-            }
+            let deadline = Date().addingTimeInterval(3)
+            while !stopped.load(ordering: .acquiring), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+            if !stopped.load(ordering: .acquiring) { failed = true; meeting.issues.add("Native audio shutdown timed out") }
         }
         assembler.finishInputs()
         if !assembler.wait() {
-            captureFailed = true; issues.add("Channel assembler shutdown timed out")
-            outputLane.finishCapture()
+            failed = true; meeting.issues.add("Channel assembler shutdown timed out")
+            meeting.lane.finishCapture()
         }
-        if assembler.failed.load(ordering: .acquiring) { captureFailed = true }
-        for lane in lanes {
-            if !lane.waitForWriter() { captureFailed = true; issues.add("\(lane.source.rawValue) WAV writer shutdown timed out") }
-            if lane.recordingOverflow.load(ordering: .acquiring) { captureFailed = true }
+        if assembler.failed.load(ordering: .acquiring) { failed = true }
+        for issue in engineIssues.all { meeting.issues.add(issue) }
+        if started && inputs[1].receivedFrames.load(ordering: .acquiring) == 0 {
+            failed = true; meeting.issues.add("No microphone audio was received")
         }
-        manifest.chunks = lanes.flatMap(\.chunks)
-        manifest.inputFrames = Dictionary(uniqueKeysWithValues: inputs.map { ($0.source.rawValue, $0.receivedFrames.load(ordering: .acquiring)) })
-        if appCapture != nil {
-            if manifest.chunks.isEmpty || manifest.chunks.contains(where: { !$0.closed }) {
-                captureFailed = true; issues.add("Recording did not produce complete audio tracks")
+        observer.stop()
+        meeting.manifest.meeting = observer.snapshot
+        meeting.manifest.inputFrames = frames()
+        if reason == "quit" {
+            switch stop.received.load(ordering: .acquiring) {
+            case SIGINT: reason = "interrupt"
+            case SIGTERM: reason = "terminate"
+            default: break
             }
-            for input in inputs where input.receivedFrames.load(ordering: .acquiring) == 0 {
-                captureFailed = true; issues.add("No \(input.source.rawValue) audio was received")
-            }
-        } else if manifest.transcription == "starting" || manifest.transcription == "running" {
-            manifest.transcription = "incomplete"
         }
-        manifest.recording = captureFailed ? "failed" : "complete"
-        meeting.stop()
-        manifest.meeting = meeting.snapshot
-        manifest.issues = issues.all
-        try atomicJSON(manifest, at: manifestURL) // audio completion survives a speech shutdown failure
-
-        if tee != nil, appCapture != nil {
-            let audioStatus = captureFailed ? "Audio shutdown finished with issues." : "WAV saved."
-            diagnostic("\(audioStatus) Finishing transcription; Ctrl-C again to skip waiting.")
-        }
-        let finalized = await finishRecognition(recognizers, shutdown: stop.state)
-        if manifest.transcription == "running" { manifest.transcription = finalized ? "complete" : "incomplete" }
-        if lanes.contains(where: { $0.speechOverflow.load(ordering: .acquiring) }) { manifest.transcription = "incomplete" }
-        if let tee {
-            do { try tee.finish(complete: manifest.transcription == "complete", shutdown: stop.state) }
-            catch { manifest.transcription = "incomplete"; issues.add(String(describing: error)) }
-            if tee.hasFailed { manifest.transcription = "incomplete" }
-        }
-        if stop.state.interrupted, tee != nil {
-            recognizers.forEach { $0.cancel() }
-            manifest.transcription = "interrupted"
-            issues.add("Transcription interrupted by user; saved WAV and written transcript retained")
-        }
-        manifest.issues = issues.all
-        try atomicJSON(manifest, at: manifestURL)
-        var speakerRun: String?
-        if appCapture != nil {
-            do {
-                let run = try await HookRunner.run(session: options.output, options: options.hooks, shutdown: stop.state)
-                speakerRun = run.speakerRun
-                if !run.complete {
-                    issues.add("Post-session hooks did not all complete; see the session's hooks directory")
-                }
-            } catch { issues.add("Post-session hooks failed: \(error)") }
-        }
-        manifest.issues = issues.all
-        try atomicJSON(manifest, at: manifestURL)
-        for issue in manifest.issues where warned.insert(issue).inserted { diagnostic(issue) }
-        if appCapture == nil { diagnostic("Recording did not start. Failure details saved to \(manifestURL.path)") }
-        else { diagnostic("Saved \(options.output.path); audio \(manifest.recording), transcript \(manifest.transcription)") }
+        meeting.manifest.stopReason = failed ? "capture-error" : reason
+        let result = await processMeeting(meeting, started: started, failed: failed, hooks: options.hooks, shutdown: stop.state, after: processing).value
         keys?.stop()
-        try HookRunner.reviewIfInteractive(session: options.output, run: speakerRun, options: options.hooks, shutdown: stop.state)
-        return captureFailed ? 1 : (manifest.issues.isEmpty ? 0 : 2)
+        for review in result.reviews {
+            if try !HookRunner.reviewIfInteractive(session: review.session, run: review.run, options: options.hooks, shutdown: stop.state) { break }
+        }
+        return result.status
     }
 
     private static func authorizeAndReport(microphone: InputDevice) async {

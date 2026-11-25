@@ -9,13 +9,13 @@ Apple's asset framework to download a model.
 Before recording, `--app` resolves a case-insensitive name/bundle substring or
 quoted `*`/`?` wildcard against running main applications. One match selects
 automatically; ambiguity uses a numbered stdin picker with stderr prompts.
-Embedded helpers are omitted. Selection binds one bundle ID and PID, which
-native capture revalidates and uses in its single-application filter.
+Embedded helpers are omitted. Each argument selects one app. The ScreenCaptureKit include filter follows
+these bundle IDs and the selected PIDs. Installed apps can wait for launch.
 Noninteractive ambiguity fails before output creation or capture permissions.
 See [app selection](adr/0004-select-app-by-name-or-pattern.md).
 
 The short form `capture-it teams` routes to recording. Default output is a
-sanitized search-term plus local timestamp under the capture home’s `recordings/` directory. Before
+sanitized app list plus local date and occurrence under the capture home’s `recordings/` directory. Before
 opening capture, explicit `--mic` wins; otherwise a single exposed active
 input from the app's audio processes is preferred, with system-default fallback.
 Input device scope and active-input status come from public Core Audio properties.
@@ -31,7 +31,7 @@ flowchart LR
     AQ --> C[Timestamp assembly worker]
     MQ --> C
     C --> WQ[Bounded WAV queue]
-    WQ --> W[One recording.wav: L / R / mic]
+    WQ --> W[One WAV per meeting: L / R / mic]
     C --> RQ[Bounded speech queue]
     RQ --> R[Explicit mono downmix + one analyzer]
     R --> T[Bounded transcript mailbox]
@@ -65,8 +65,7 @@ hold at most 512 segments; transcript text is not retained in an unbounded
 in-memory array.
 
 The single PCM16 WAV uses WAVE_FORMAT_EXTENSIBLE with discrete channels,
-periodic header checkpoints and an explicit RIFF size guard. No rollover
-occurs. The manifest declares app-left/app-right/microphone order and input
+periodic header checkpoints and an explicit RIFF size guard. At four hours the assembler routes the next complete packet to a fresh meeting. The manifest declares app-left/app-right/microphone order and input
 sample counts. Different player downmix rules do not affect the explicit
 recognition downmix. v0.1 separate-file replay is rejected without changing
 old files.
@@ -114,8 +113,9 @@ hooks. The standalone `hooks` command can retry on saved artifacts. See
 Provider-specific behavior and speaker enrichment stay outside the core.
 See [installed FluidAudio selection](adr/0010-installed-fluid-hook.md).
 
-A foreground terminal observer reads `q` without Enter on a separate nonblocking
-control queue. It requests the idempotent drain state, while signal handlers
+A foreground terminal observer reads `n` and `q` without Enter on a separate nonblocking
+control queue. The new meeting key rotates the output lane on the same capture stream.
+The quit key requests the idempotent drain state, while signal handlers
 retain escalation. Terminal settings restore synchronously before the CLI exits;
 piped stdin stays untouched. See [graceful quit key](adr/0011-graceful-quit-key.md).
 
@@ -130,3 +130,5 @@ The snapshot travels in session/hook metadata. See
 Decisions: [Use independent bounded workers](adr/0001-native-concurrent-cli.md),
 [use ScreenCaptureKit for native capture](adr/0002-screencapturekit-capture.md),
 and [store one multichannel WAV](adr/0003-single-multichannel-wav.md).
+
+[Meeting rotation, output names and app reconnection](adr/0014-continuous-meeting-capture.md).

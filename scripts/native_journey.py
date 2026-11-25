@@ -124,15 +124,15 @@ try:
                 time.sleep(0.02)
             os.kill(children[0], signal.SIGTERM)
             child.communicate(timeout=15)
-            assert child.returncode == 1
+            assert child.returncode == 0
         finally:
             if child.poll() is None:
                 child.kill()
                 child.wait()
     saved = json.loads((exited / "session.json").read_text())
-    assert saved["recording"] == "failed" and saved["issues"]
+    assert saved["recording"] == "complete" and saved["stopReason"] == "duration"
     assert saved["chunks"] and all(chunk["closed"] for chunk in saved["chunks"])
-    print("passed: selected-app exit stops capture visibly and retains closed audio chunks")
+    print("passed: selected-app exit keeps the microphone recording until the timed stop")
 finally:
     for child in children:
         try:

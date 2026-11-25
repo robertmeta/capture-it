@@ -37,7 +37,9 @@ final class ScreenWriter: @unchecked Sendable {
     private let fd: Int32
     private let issues: Issues
     private let failed = Atomic<Bool>(false)
-    private let originalFlags = Atomic<Int32>(-1)
+    // Adjacent meetings may briefly share stdout while the old recognizer drains.
+    private static let flagsByFD = Mutex<[Int32: (original: Int32, count: Int)]>([:])
+    private let holdsFlags = Atomic<Bool>(false)
     private let timeout: TimeInterval
 
     init(fd: Int32 = STDOUT_FILENO, issues: Issues, capacity: Int = 512, timeout: TimeInterval = 2) {
@@ -49,11 +51,7 @@ final class ScreenWriter: @unchecked Sendable {
         done.enter()
         DispatchQueue(label: "capture-it.transcript.screen", qos: .utility).async { [self] in
             defer { done.leave() }
-            let flags = fcntl(fd, F_GETFL)
-            originalFlags.store(flags, ordering: .releasing)
-            guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                fail("Cannot configure transcript stdout"); return
-            }
+            guard acquireFlags() else { fail("Cannot configure transcript stdout"); return }
             defer { restoreFlags() }
             while let data = queue.take() {
                 if failed.load(ordering: .acquiring) { continue }
@@ -97,9 +95,29 @@ final class ScreenWriter: @unchecked Sendable {
         if !stopped { restoreFlags() }
         return stopped
     }
+    private func acquireFlags() -> Bool {
+        Self.flagsByFD.withLock { table in
+            if var entry = table[fd] {
+                entry.count += 1; table[fd] = entry
+            } else {
+                let flags = fcntl(fd, F_GETFL)
+                guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return false }
+                table[fd] = (flags, 1)
+            }
+            holdsFlags.store(true, ordering: .releasing)
+            return true
+        }
+    }
+
     private func restoreFlags() {
-        let flags = originalFlags.load(ordering: .acquiring)
-        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags) }
+        Self.flagsByFD.withLock { table in
+            guard holdsFlags.exchange(false, ordering: .acquiringAndReleasing), var entry = table[fd] else { return }
+            entry.count -= 1
+            if entry.count == 0 {
+                _ = fcntl(fd, F_SETFL, entry.original)
+                table.removeValue(forKey: fd)
+            } else { table[fd] = entry }
+        }
     }
 }
 

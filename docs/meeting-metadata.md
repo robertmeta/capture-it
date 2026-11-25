@@ -54,9 +54,9 @@ calendar verification. Optional strings are omitted when unavailable. Other
 statuses are `permission-required`, `unavailable`, `unknown` and `ambiguous`.
 Hooks should retain this provenance when generating notes.
 
-This adds metadata to the saved session and AI handoff. It keeps the existing
-search-term/timestamp output folder naming. It does not rename recordings as
-window titles change, read meeting participant names or identify active speakers.
+The selected app queries, local date and occurrence determine the output
+folder. Multi-app recordings accept an explicit title. Automatic window-title
+detection applies to a single selected app.
 
 The native title journey exercises actual app windows, a competing unrelated
 app, an explicit override and a generic title. Actual meeting-title exposure

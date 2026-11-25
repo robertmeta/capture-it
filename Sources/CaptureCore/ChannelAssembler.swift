@@ -151,10 +151,13 @@ final class ChannelTimeline {
 final class ChannelAssembler: @unchecked Sendable {
     let inputs: [CaptureInput]
     let failed = Atomic<Bool>(false)
-    private let output: AudioLane
+    private let routeLock = NSLock()
+    private var output: AudioLane
+    private var origin: Double?
     private let issues: Issues
     private let epoch: Double
     private let done = DispatchGroup()
+    private var finished = false
     private var started = false
 
     init(inputs: [CaptureInput], output: AudioLane, epoch: Double, issues: Issues) {
@@ -164,7 +167,7 @@ final class ChannelAssembler: @unchecked Sendable {
     func start() {
         started = true; done.enter()
         DispatchQueue(label: "capture-it.align", qos: .userInitiated).async { [self] in
-            defer { output.finishCapture(); done.leave() }
+            defer { finishOutput(); done.leave() }
             let timeline = ChannelTimeline()
             do {
                 while true {
@@ -176,17 +179,38 @@ final class ChannelAssembler: @unchecked Sendable {
                     }
                     let finished = inputs.allSatisfy { $0.queue.isDrained }
                     let now = AVAudioTime.seconds(forHostTime: mach_absolute_time()) - epoch - 0.5
-                    try timeline.render(through: finished ? nil : now) { output.acceptPacket($0) }
+                    try timeline.render(through: finished ? nil : now) { route($0) }
                     if finished { break }
                     Thread.sleep(forTimeInterval: 0.002)
                 }
-            } catch { failed.store(true, ordering: .releasing); issues.add("Channel alignment failed: \(error)") }
+            } catch { issues.add("Channel alignment failed: \(error)"); failed.store(true, ordering: .releasing) }
         }
+    }
+
+    /// Switch between complete aligned packets. No audio device or capture clock restarts.
+    func rotate(to next: AudioLane) {
+        routeLock.lock(); defer { routeLock.unlock() }
+        output.finishCapture()
+        output = next
+        if finished { next.finishCapture() }
+        origin = nil
+    }
+
+    private func route(_ packet: AudioPacket) {
+        routeLock.lock(); defer { routeLock.unlock() }
+        if origin == nil { origin = packet.time }
+        output.acceptPacket(AudioPacket(buffer: packet.buffer, time: packet.time - origin!))
+    }
+
+    private func finishOutput() {
+        routeLock.lock(); defer { routeLock.unlock() }
+        finished = true
+        output.finishCapture()
     }
 
     func finishInputs() {
         inputs.forEach { $0.queue.finish() }
-        if !started { output.finishCapture() }
+        if !started { finishOutput() }
     }
     func wait(timeout: Double = 15) -> Bool { done.wait(timeout: .now() + timeout) == .success }
 }

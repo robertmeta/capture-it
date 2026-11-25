@@ -22,13 +22,14 @@ def command(query, directory):
     return [binary, "record", "--app", query, "--out", str(directory), "--duration", "2", "--no-transcribe"]
 
 
-def assert_capture(directory, pid):
+def assert_capture(directory, pid, filename="recording.wav"):
     saved = json.loads((directory / "session.json").read_text())
     assert saved["recording"] == "complete" and saved["app"] == "com.robertmeta.capture-it.fixture.selected", saved
     assert saved["selectedProcessID"] == pid
     assert saved["microphoneSelection"] in ("system-default", "app", "explicit")
-    assert list(directory.glob("*.wav")) == [directory / "recording.wav"]
-    with wave.open(str(directory / "recording.wav")) as audio:
+    assert saved["chunks"][0]["file"] == filename
+    assert list(directory.glob("*.wav")) == [directory / filename]
+    with wave.open(str(directory / filename)) as audio:
         assert audio.getnchannels() == 3 and audio.getnframes() > 24_000
 
 
@@ -92,8 +93,8 @@ try:
         created = set(recordings.iterdir()) - before
         assert len(created) == 1
         output = created.pop()
-        assert re.fullmatch(r"selected-\d{8}-\d{6}(?:-\d+)?", output.name), output
-        assert_capture(output, children[0])
+        assert re.fullmatch(r"selected-\d{4}-\d{2}-\d{2}-01", output.name), output
+        assert_capture(output, children[0], output.name + ".wav")
         saved = json.loads((output / "session.json").read_text())
         assert saved["microphoneSelection"] == "system-default", saved
         assert "Microphone:" in result.stderr and "system default" in result.stderr

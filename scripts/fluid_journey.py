@@ -238,6 +238,18 @@ if installed:
     assert (only_output / "diarization.json").is_file()
     assert not list(only_output.glob("speaker-transcript.*"))
 
+    quiet = root / "quiet meeting"
+    quiet.mkdir()
+    with wave.open(str(quiet / "recording.wav"), "wb") as audio:
+        audio.setparams((3, 2, 48000, 0, "NONE", "not compressed"))
+        audio.writeframes(bytes(2 * 48000 * 6))
+    quiet_manifest = dict(manifest, chunks=[dict(manifest["chunks"][0], frames=96000)])
+    (quiet / "session.json").write_text(json.dumps(quiet_manifest))
+    subprocess.run([binary, "hooks", str(quiet)], stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=30)
+    quiet_report = json.loads(next(quiet.glob("hooks/*/*/diarization.json")).read_text())
+    assert quiet_report["speakers"] == quiet_report["turns"] == []
+    assert latest_report(quiet)[0]["status"] == "complete"
+
     # Missing models fail without downloads and do not damage original artifacts.
     missing = dict(os.environ, CAPTURE_IT_FLUID_MODELS=str(root / "missing models"))
     check = subprocess.run([binary, "hooks", str(session)], env=missing, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
@@ -322,15 +334,42 @@ if installed:
         review_home = root / "record home"
         review_env = dict(os.environ)
         review_env.pop("CAPTURE_IT_VOICES", None)
-        review_log = terminal_command([binary, "record", "--app", "com.robertmeta.capture-it.fixture.fluidcapture",
-                                       "--home", str(review_home), "--duration", "10", "--no-transcribe"],
-                                      [(b"Who is ", b":quit\n")], root / "record-review.log", review_env)
-        fresh = next((review_home / "recordings").iterdir())
-        assert "WAV saved" in review_log or "Saved " in review_log
-        assert json.loads((fresh / "session.json").read_text())["recording"] == "complete"
-        assert next(fresh.glob("hooks/*/*/diarization.json")).is_file()
-        assert not (review_home / "voices").exists()
-        print("passed: real capture automatically saved under its home and entered cancellable voice review")
+        sessions = review_home / "recordings"
+
+        def live_words(number):
+            for path in sessions.glob(f"*-{number}/transcript.txt"):
+                audio = path.parent / (path.parent.name + ".wav")
+                if path.stat().st_size > 0 and audio.exists() and audio.stat().st_size > 9 * 48000 * 6:
+                    return True
+            return False
+
+        def background_done():
+            return live_words("02") and any(sessions.glob("*-01/hooks/*/*/diarization.json"))
+
+        review_log = terminal_command([binary, "FluidCapture", "--home", str(review_home)],
+                                     [(lambda: live_words("01"), b"n"), (background_done, b"q"),
+                                      (b"Who is ", b"Rotation Example\n")],
+                                     root / "record-review.log", review_env, capture_text=True)
+        assert review_log.count("Who is ") == 1 and review_log.count("Speaker review →") == 2
+        first, second = sorted(sessions.iterdir())
+        for directory, reason in [(first, "new-meeting"), (second, "quit")]:
+            saved = json.loads((directory / "session.json").read_text())
+            chunk, = saved["chunks"]
+            assert saved["recording"] == saved["transcription"] == "complete"
+            assert saved["stopReason"] == reason and chunk["file"] == directory.name + ".wav"
+            assert json.loads((directory / "transcript.json").read_text())["complete"]
+            analysis = next(directory.glob("hooks/*/*/diarization.json"))
+            assert json.loads(analysis.read_text())["speakers"]
+            assert analysis.with_name("speaker-transcript.jsonl").stat().st_size > 0
+            labels = json.loads(analysis.with_name("speaker-identities.json").read_text())
+            expected = "assigned" if directory == first else "voice-match"
+            assert list(labels.values()) == [{"name": "Rotation Example", "source": expected}], labels
+        assert list((review_home / "voices").glob("*.voice/sample-1.wav"))
+        replay = root / "numbered replay"
+        subprocess.run([binary, "transcribe", str(first), "--out", str(replay), "--no-fluid"],
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60)
+        assert (replay / "transcript.jsonl").stat().st_size > 0
+        print("passed: live ASR and FluidAudio across rotation, numbered WAVs, one prompt and remembered name in the next queued review")
     finally:
         if child is not None and child.poll() is None:
             child.kill(); child.wait()

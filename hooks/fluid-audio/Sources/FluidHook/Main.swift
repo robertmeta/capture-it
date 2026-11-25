@@ -45,7 +45,7 @@ private struct ModelManifest: Decodable {
         }
         let directory = modelDirectory()
         if reviewing || dialogue {
-            try await SpeakerReview.review(session: URL(fileURLWithPath: arguments[1]), run: arguments[2],
+            let completed = try await SpeakerReview.review(session: URL(fileURLWithPath: arguments[1]), run: arguments[2],
                                            interactive: dialogue, speaker: dialogue ? "" : arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
                                            revision: spec.revision) {
                 _ = try verifyModels(directory: directory, spec: spec)
@@ -53,6 +53,7 @@ private struct ModelManifest: Decodable {
                 manager.initialize(models: try loadModels(directory: directory))
                 return manager
             }
+            if !completed, ProcessInfo.processInfo.environment["CAPTURE_IT_REVIEW_QUEUE"] == "1" { exit(3) }
             return
         }
         let manifest = try verifyModels(directory: directory, spec: spec)
@@ -78,7 +79,9 @@ private struct ModelManifest: Decodable {
         // unused because its fallback may download or replace assets.
         manager.initialize(models: models)
         let began = ContinuousClock.now
-        let result = try await manager.process(analysis)
+        let result: DiarizationResult
+        do { result = try await manager.process(analysis) }
+        catch OfflineDiarizationError.noSpeechDetected { result = DiarizationResult(segments: []) }
         let elapsed = began.duration(to: .now).components
         let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
         let turns = try result.segments.map { segment -> SpeakerTurn in
@@ -106,6 +109,7 @@ private struct ModelManifest: Decodable {
         struct Report: Encodable {
             let version = 1
             let speakerReviewVersion = 1
+            let meetingReviewVersion = 1
             let engine = "FluidAudio offline Community-1/VBx"
             let sourceWav: String
             let modelRepository: String

@@ -63,8 +63,8 @@ struct HookEvent: Codable {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: metadata))
         guard manifest.recording == "complete" || manifest.recording == "failed",
               manifest.chunks.count == 1, let chunk = manifest.chunks.first,
-              chunk.closed, chunk.file == "recording.wav", chunk.frames > 0 else {
-            throw CaptureError.message("Hooks require one finalized recording.wav; recording is unchanged")
+              chunk.closed, chunk.file == URL(fileURLWithPath: chunk.file).lastPathComponent, chunk.file.hasSuffix(".wav"), chunk.frames > 0 else {
+            throw CaptureError.message("Hooks require one finalized session WAV; recording is unchanged")
         }
         let wav = directory.appendingPathComponent(chunk.file)
         let audio = try AVAudioFile(forReading: wav)
@@ -113,7 +113,8 @@ enum HookRunner {
         var results: [HookResult] = []
         var speakerRun: String?
         let fluid = InstalledHooks.fluid()?.resolvingSymlinksInPath()
-        diagnostic("Post-session hooks → \(runDirectory.path); Ctrl-C cancels remaining hooks")
+        let hint = shutdown.requested ? "Ctrl-C cancels remaining hooks" : "capture continues"
+        diagnostic("Post-session hooks → \(runDirectory.path); \(hint)")
         for (index, executable) in options.executables.enumerated() {
             let output = runDirectory.appendingPathComponent(String(format: "%03d", index + 1))
             try privateDirectory(output)
@@ -195,23 +196,30 @@ enum HookRunner {
         isatty(STDIN_FILENO) == 1 && tcgetpgrp(STDIN_FILENO) == getpgrp()
     }
 
-    static func reviewIfInteractive(session: URL, run: String?, options: HookOptions, shutdown: ShutdownState) throws {
-        guard options.promptForSpeakers, foregroundTerminal, !shutdown.interrupted, let run else { return }
+    @discardableResult static func reviewIfInteractive(session: URL, run: String?, options: HookOptions, shutdown: ShutdownState) throws -> Bool {
+        guard options.promptForSpeakers, foregroundTerminal, !shutdown.interrupted, let run else { return false }
         // A core-only upgrade can leave an older helper beside the executable.
-        struct Capabilities: Decodable { let speakerReviewVersion: Int? }
+        struct Capabilities: Decodable {
+            let speakerReviewVersion: Int?
+            let meetingReviewVersion: Int?
+            let sourceWav: String?
+        }
         let report = session.appendingPathComponent("hooks/\(run)/diarization.json")
         let capabilities = try JSONDecoder().decode(Capabilities.self, from: Data(contentsOf: report))
-        guard capabilities.speakerReviewVersion == 1 else {
+        let legacyWav = capabilities.sourceWav.map { URL(fileURLWithPath: $0).lastPathComponent == "recording.wav" } ?? false
+        guard capabilities.speakerReviewVersion == 1, capabilities.meetingReviewVersion == 1 || legacyWav else {
             diagnostic("Speaker analysis saved. Run make setup to update the helper for interactive review.")
-            return
+            return true
         }
-        try review(session: session, run: run, home: options.home)
+        diagnostic("Speaker review → \(session.path)")
+        return try review(session: session, run: run, home: options.home)
     }
 
-    static func review(session: URL, run: String, home: URL?) throws {
+    @discardableResult static func review(session: URL, run: String, home: URL?) throws -> Bool {
         guard let helper = InstalledHooks.fluid() else { throw CaptureError.message("Speaker review needs the installed FluidAudio helper. Run make setup.") }
         var environment = ProcessInfo.processInfo.environment
         if let home { environment["CAPTURE_IT_HOME"] = home.path }
+        environment["CAPTURE_IT_REVIEW_QUEUE"] = "1"
         // Keep the dialogue in the foreground process group so the terminal can deliver input and Ctrl-C.
         let pid = try spawn(executable: helper.path, arguments: ["--review", session.path, run],
                             environment: environment, stdout: STDERR_FILENO, stderr: STDERR_FILENO, foreground: true)
@@ -219,9 +227,11 @@ enum HookRunner {
         while waitpid(pid, &status, 0) < 0 {
             if errno != EINTR { throw CaptureError.message("Could not wait for speaker review") }
         }
-        guard status == 0 || status & 0x7f == SIGINT else {
+        if status == (3 << 8) || status & 0x7f == SIGINT { return false }
+        guard status == 0 else {
             throw CaptureError.message("Speaker review stopped. Resume with capture-it speakers and the session path.")
         }
+        return true
     }
 
     private static func spawn(executable: String, arguments: [String], environment: [String: String], stdout: Int32, stderr: Int32, foreground: Bool = false) throws -> pid_t {

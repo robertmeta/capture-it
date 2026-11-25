@@ -7,13 +7,13 @@ public enum CLI {
     capture-it \(captureItVersion) — app audio + microphone, WAV + live local transcript
 
     Usage:
-      capture-it NAME_OR_PATTERN [record options]
+      capture-it NAME_OR_PATTERN [NAME_OR_PATTERN ...] [record options]
       capture-it apps [--json]
       capture-it devices [--json]
       capture-it doctor [--locale en-US] [--json]
       capture-it setup-speech [--locale en-US]   # explicit Apple model download
       capture-it setup-accessibility           # request window-title permission
-      capture-it record [NAME_OR_PATTERN | --app NAME_OR_PATTERN] [options]
+      capture-it record [NAME_OR_PATTERN ... | --app NAME_OR_PATTERN] [options]
       capture-it transcribe SESSION_DIRECTORY [--out DIRECTORY] [--locale en-US]
       capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
 
@@ -31,7 +31,7 @@ public enum CLI {
       --app NAME_OR_PATTERN  Name/bundle substring or quoted * / ? wildcard
                              One match auto-selects; multiple matches prompt
       --home DIRECTORY       Default: ~/Documents/capture-it (or CAPTURE_IT_HOME)
-      --out DIRECTORY        Exact session folder; default: HOME/recordings/SEARCH-yyyyMMdd-HHmmss
+      --out DIRECTORY        Exact session folder; default: HOME/recordings/APPS-YYYY-MM-DD-01
       --no-review            Skip the interactive speaker prompts after analysis
       --mic DEVICE_UID       Override app input detection / system-default fallback
       --locale LOCALE        Default: en-US
@@ -46,13 +46,13 @@ public enum CLI {
     selects a saved transcript directory; otherwise use the session's transcript.
 
     Final transcript lines are teed to stdout and DIRECTORY/transcript.txt.
-    DIRECTORY/recording.wav has three channels: app left, app right, microphone.
+    The WAV shares the numbered meeting's name. Its channels are selected apps L/R and microphone.
     One mono downmix feeds a single live transcription stream.
     WAV, transcript file and stdout workers run independently with bounded queues.
     Status and errors go to stderr. Capture/speech never upload audio.
     After make setup, the installed FluidAudio hook runs locally after saving.
     First Ctrl-C saves WAV, finishes speech, then labels; Ctrl-C again skips/cancels.
-    In an interactive recording, q (no Enter) starts the same graceful stop.
+    In a terminal, n starts a new meeting WAV; q saves and quits. Neither key needs Enter.
     Repeated q never cancels finishing work. Escape has no stop action.
     FluidAudio runs before explicit hooks unless you place it explicitly yourself.
     Explicit hooks run your code and may use remote agents.
@@ -154,19 +154,35 @@ public enum CLI {
             process.waitUntilExit()
             return process.terminationStatus
         case "record":
-            try args.validate(allowed: ["--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
+            try args.validate(allowed: ["--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...Int.max)
             let hooks = try args.hookOptions(home: home)
             if let title = args.values["--title"], MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
             guard args.values["--app"] == nil || args.positionals.isEmpty else { throw CaptureError.message("Use either a positional app name or --app, not both") }
-            guard let app = args.values["--app"] ?? args.positionals.first else { throw CaptureError.message("Choose an app: capture-it teams, or capture-it record --app NAME") }
+            let queries = args.values["--app"].map { [$0] } ?? args.positionals
+            guard !queries.isEmpty else { throw CaptureError.message("Choose an app: capture-it teams, or capture-it record --app NAME") }
             var duration: Double?
             if let raw = args.values["--duration"] {
                 guard let value = Double(raw), value.isFinite, value > 0 else { throw CaptureError.message("--duration must be a positive finite number") }
                 duration = value
             }
-            let selected = try await AppSelection.resolve(app)
-            let output = args.values["--out"].map { URL(fileURLWithPath: $0) } ?? CaptureDefaults.output(query: app, appName: selected.name, directory: CaptureHome(override: home).recordings)
-            return try await Sessions.record(RecordOptions(app: selected.bundleID, output: output, microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US", transcribe: !args.flags.contains("--no-transcribe"), duration: duration, processID: selected.pid, hooks: hooks, title: args.values["--title"]))
+            var targets: [AppChoice] = []
+            var stems: [String] = []
+            for query in queries {
+                let target = try await AppSelection.resolve(query)
+                if !targets.contains(where: { $0.bundleID == target.bundleID }) {
+                    targets.append(target)
+                    stems.append(CaptureDefaults.stem(query, fallback: target.name))
+                }
+            }
+            let exact = args.values["--out"].map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+            var options = RecordOptions(app: targets[0].bundleID, output: exact ?? CaptureHome(override: home).recordings,
+                                        microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US",
+                                        transcribe: !args.flags.contains("--no-transcribe"), duration: duration,
+                                        processID: targets[0].pid, hooks: hooks, title: args.values["--title"])
+            options.targets = targets
+            options.meetingStem = stems.joined(separator: "-")
+            options.numberFirstMeeting = exact == nil
+            return try await Sessions.record(options)
         case "transcribe":
             try args.validate(allowed: ["--home", "--out", "--locale", "--no-fluid", "--hook", "--hook-timeout"], positionals: 1...1)
             let hooks = try args.hookOptions(home: home)

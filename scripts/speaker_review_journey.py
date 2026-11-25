@@ -18,7 +18,7 @@ def foreground():
     os.tcsetpgrp(0, os.getpgrp())
 
 
-def terminal_command(command, replies, log, env):
+def terminal_command(command, replies, log, env, capture_text=False):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     with log.open("wb") as errors:
@@ -30,7 +30,12 @@ def terminal_command(command, replies, log, env):
                 deadline = time.monotonic() + 60
                 while True:
                     data = log.read_bytes()
-                    index = data.find(token, offset)
+                    if callable(token):
+                        if token():
+                            break
+                        index = -1
+                    else:
+                        index = data.find(token, offset)
                     if index != -1:
                         offset = index + len(token)
                         break
@@ -45,7 +50,7 @@ def terminal_command(command, replies, log, env):
                 if select.select([master], [], [], 0.05)[0]:
                     os.read(master, 4096)
             stdout, _ = child.communicate()
-            assert child.returncode == 0 and not stdout, (child.returncode, log.read_text(), stdout)
+            assert child.returncode == 0 and (bool(stdout) if capture_text else not stdout), (child.returncode, log.read_text(), stdout)
             assert termios.tcgetattr(master) == original, "Terminal mode was not restored"
         finally:
             os.close(slave)

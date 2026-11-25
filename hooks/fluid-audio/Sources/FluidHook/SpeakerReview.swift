@@ -69,35 +69,57 @@ enum SpeakerReview {
     }
 
     static func review(session: URL, run: String, interactive: Bool, speaker: String, name: String?, revision: String,
-                       makeManager: () throws -> OfflineDiarizerManager) async throws {
+                       makeManager: () throws -> OfflineDiarizerManager) async throws -> Bool {
         let output = try select(session: session, run: run)
         let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: output.appendingPathComponent("diarization.json")))
         guard report.version == 1 else { throw HookFailure("Unsupported diarization report version") }
         let examples = voiceExamples(report.turns, minimumDuration: 0.05)
-        let wav = session.appendingPathComponent("recording.wav")
+        struct SessionFiles: Decodable {
+            struct Chunk: Decodable { let file: String }
+            let chunks: [Chunk]
+        }
+        let saved = try JSONDecoder().decode(SessionFiles.self, from: Data(contentsOf: session.appendingPathComponent("session.json")))
+        guard saved.chunks.count == 1, let file = saved.chunks.first?.file, file.hasSuffix(".wav"),
+              URL(fileURLWithPath: file).lastPathComponent == file else { throw HookFailure("Expected one session WAV filename") }
+        let wav = session.appendingPathComponent(file)
         if interactive {
             let terminal = try SpeakerTerminal()
             let matched = try identities(in: output)
             let unknown = report.speakers.filter { matched[$0] == nil }
             if unknown.isEmpty {
                 print(report.speakers.isEmpty ? "No speakers detected." : "All speakers already have names.")
-                return
+                return true
             }
+            var finished = true
+            var manager: OfflineDiarizerManager?
             print("Reviewing \(unknown.count) unnamed speaker(s). Enter skips one. :quit or Ctrl-C ends review.")
             for id in unknown {
-                guard !terminal.cancelled else { break }
+                guard !terminal.cancelled else { finished = false; break }
                 guard let spans = examples[id], let first = spans.first else {
                     print("\(id) has no isolated sample. Use --assign to name this speaker manually.")
                     continue
                 }
+                let references = try references(revision: revision)
+                if !references.isEmpty, first.upperBound - first.lowerBound >= 2 {
+                    let current = try manager ?? makeManager()
+                    manager = current
+                    let clip = files.temporaryDirectory.appendingPathComponent("capture-it-\(UUID()).wav")
+                    defer { try? files.removeItem(at: clip) }
+                    try AnalysisAudio.prepare(wav: wav, destination: clip, interval: first)
+                    if let vector = try await embedding(clip, manager: current),
+                       let name = VoiceMatching.match(vector, references: references) {
+                        try saveMatch(name, speaker: id, output: output)
+                        continue
+                    }
+                }
                 print("Playing \(id)…")
                 try play(wav: wav, span: first, terminal: terminal)
-                guard !terminal.cancelled, let answer = try terminal.name(for: id), answer != ":quit" else { break }
+                guard !terminal.cancelled, let answer = try terminal.name(for: id), answer != ":quit" else { finished = false; break }
                 if answer.isEmpty { continue }
                 try await assign(answer, speaker: id, output: output, wav: wav, spans: spans, revision: revision, makeManager: makeManager)
             }
             print("Review finished. You can resume with capture-it speakers and this session path.")
-            return
+            return finished && !terminal.cancelled
         }
         if speaker.isEmpty && name == nil {
             let labels = try identities(in: output)
@@ -106,7 +128,7 @@ enum SpeakerReview {
                 print("\(id)\t\(labels[id]?.name ?? "(unnamed)")\t\(times.isEmpty ? "no isolated sample" : times.joined(separator: ", "))")
             }
             if report.speakers.isEmpty { print("No speakers detected") }
-            return
+            return true
         }
         guard report.speakers.contains(speaker) else { throw HookFailure("Unknown speaker ID. List speakers first.") }
         let spans = examples[speaker] ?? []
@@ -116,6 +138,7 @@ enum SpeakerReview {
             guard let first = spans.first else { throw HookFailure("No isolated voice sample to play.") }
             try play(wav: wav, span: first)
         }
+        return true
     }
 
     private static func assign(_ name: String, speaker: String, output: URL, wav: URL, spans: [Range<Double>],
@@ -134,8 +157,24 @@ enum SpeakerReview {
         if !enrollmentSpans.isEmpty {
             try await enroll(clean, wav: wav, spans: enrollmentSpans, destination: destination, revision: revision, makeManager: makeManager)
         }
+        try writeIdentity(Identity(name: clean, source: "assigned"), speaker: speaker, output: output)
+        print("\(speaker) → \(clean)")
+        print(enrollmentSpans.isEmpty ? "Assigned in this recording only. Enrollment needs two seconds of isolated speech." : "Voice samples: \(destination.path)")
+    }
+
+    private static func saveMatch(_ name: String, speaker: String, output: URL) throws {
+        let fd = open(output.path, O_RDONLY)
+        guard fd >= 0 else { throw HookFailure("Cannot open speaker analysis directory") }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { throw HookFailure("Cannot lock speaker analysis") }
+        try writeIdentity(Identity(name: name, source: "voice-match"), speaker: speaker, output: output)
+    }
+
+    // The caller holds the analysis directory lock while updating both projections.
+    private static func writeIdentity(_ identity: Identity, speaker: String, output: URL) throws {
         var labels = try identities(in: output)
-        labels[speaker] = Identity(name: clean, source: "assigned")
+        if identity.source == "voice-match", labels[speaker] != nil { return }
+        labels[speaker] = identity
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(labels).write(to: output.appendingPathComponent("speaker-identities.json"), options: .atomic)
@@ -153,8 +192,14 @@ enum SpeakerReview {
             }
             try Data(text.utf8).write(to: output.appendingPathComponent("speaker-transcript.txt"), options: .atomic)
         }
-        print("\(speaker) → \(clean)")
-        print(enrollmentSpans.isEmpty ? "Assigned in this recording only. Enrollment needs two seconds of isolated speech." : "Voice samples: \(destination.path)")
+    }
+
+    private static func embedding(_ clip: URL, manager: OfflineDiarizerManager) async throws -> [Float]? {
+        let (source, _) = try AudioSourceFactory().makeDiskBackedSource(from: clip, targetSampleRate: 16_000)
+        defer { source.cleanup() }
+        let seconds = Double(source.sampleCount) / 16_000
+        let embedded = try await manager.embedSpans(audioSource: source, spans: [0..<seconds])
+        return embedded.first.flatMap(VoiceMatching.normalized)
     }
 
     private static func play(wav: URL, span: Range<Double>, terminal: SpeakerTerminal? = nil) throws {
@@ -188,11 +233,7 @@ enum SpeakerReview {
         for (index, span) in spans.enumerated() {
             let clip = staging.appendingPathComponent("sample-\(index + 1).wav")
             try AnalysisAudio.prepare(wav: wav, destination: clip, interval: span)
-            let (source, _) = try AudioSourceFactory().makeDiskBackedSource(from: clip, targetSampleRate: 16_000)
-            defer { source.cleanup() }
-            let seconds = Double(source.sampleCount) / 16_000
-            let embedded = try await manager.embedSpans(audioSource: source, spans: [0..<seconds])
-            guard let raw = embedded.first, let vector = VoiceMatching.normalized(raw) else { throw HookFailure("Voice sample has no usable embedding") }
+            guard let vector = try await embedding(clip, manager: manager) else { throw HookFailure("Voice sample has no usable embedding") }
             vectors.append(vector)
         }
         try writeJSON(Enrollment(name: name, revision: revision, embeddings: vectors), to: staging.appendingPathComponent("profile.json"))

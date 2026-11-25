@@ -54,10 +54,10 @@ capture-it teams
 capture-it teams --no-fluid       # skip automatic labels for this recording
 
 # Process an existing session.
-capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000
+capture-it hooks ~/Documents/capture-it/recordings/teams-2026-11-25-01
 
 # Use a retried transcript.
-capture-it hooks ~/Documents/capture-it/recordings/teams-20261117-143000 --transcript ./retry-text \
+capture-it hooks ~/Documents/capture-it/recordings/teams-2026-11-25-01 --transcript ./retry-text \
   --hook-timeout 900
 
 # Checkout CLI without an installed sibling helper:
@@ -102,6 +102,7 @@ Each run writes into its normal `SESSION/hooks/UUID/NNN/` directory:
 | `speaker-transcript.txt` | Readable speaker-labeled copy, preserving original words and phrase times |
 | `stdout.log`, `stderr.log` | Existing hook-runner logs |
 
+A meeting with no detected speech produces an empty speaker and turn list.
 The completion JSON is written last. A failure can leave partial derived files;
 the generic hook result records failure. Retrying creates a new run directory.
 Audio-only sessions produce the diarization artifacts without inventing text.
@@ -125,7 +126,9 @@ speaker turns, a later alignment stage would be needed.
 ## Remembered voices
 
 After recording or running `capture-it hooks SESSION`, a foreground terminal
-reviews the completed run. It skips assigned and voice-matched IDs, plays a clip
+reviews completed meetings in order. Before playback it checks an eligible
+unknown voice against the current library, including names just confirmed in
+an earlier meeting. It skips assigned and voice-matched IDs, plays a clip
 of each remaining voice with an isolated sample, and asks for a name. Enter
 skips a speaker, while `:quit`, Ctrl-D at an empty prompt, or Ctrl-C ends review.
 Confirmed assignments persist. Scripts with piped input never prompt.

@@ -156,10 +156,12 @@ struct Manifest: Codable {
     var issues: [String] = []
     var channelLayout: [String]? = nil
     var inputFrames: [String: Int64]? = nil
+    var apps: [String]? = nil
+    var stopReason: String? = nil
     var selectedProcessID: Int32? = nil
     var microphoneSelection: String? = nil
     var microphoneNote: String? = nil
     var meeting: MeetingMetadata? = nil
 }
 
-public let captureItVersion = "0.4.0"
+public let captureItVersion = "0.5.0"

@@ -39,6 +39,7 @@ final class PCMConverter {
 /// One PCM16 WAV, using WAVE_FORMAT_EXTENSIBLE for more than two channels.
 final class WAVWriter {
     private let directory: URL
+    private let file: String
     private let source: Source
     private let maxDataBytes: UInt32
     private var handle: FileHandle?
@@ -48,8 +49,8 @@ final class WAVWriter {
     private var expectedTime: Double?
     private(set) var chunks: [Chunk] = []
 
-    init(directory: URL, source: Source = .recording, maxDataBytes: UInt32 = UInt32.max - 60) {
-        self.directory = directory; self.source = source; self.maxDataBytes = maxDataBytes
+    init(directory: URL, source: Source = .recording, file: String = "recording.wav", maxDataBytes: UInt32 = UInt32.max - 60) {
+        self.directory = directory; self.source = source; self.maxDataBytes = maxDataBytes; self.file = file
     }
 
     func append(_ packet: AudioPacket) throws {
@@ -100,7 +101,6 @@ final class WAVWriter {
     }
 
     private func begin(at time: Double, format: AVAudioFormat) throws {
-        let file = "recording.wav"
         handle = try createPrivateFile(directory.appendingPathComponent(file))
         chunks.append(Chunk(file: file, source: source, start: max(0, time), sampleRate: format.sampleRate, channels: Int(format.channelCount), frames: 0, closed: false))
         try handle!.write(contentsOf: header(chunks.last!))

@@ -77,25 +77,6 @@ public enum Hardware {
         }
     }
 
-    static func resolveApp(_ bundle: String, processID: pid_t? = nil) throws -> [AudioApp] {
-        guard !bundle.isEmpty else { throw CaptureError.message("An exact app bundle identifier is required") }
-        if let processID {
-            guard let app = NSRunningApplication(processIdentifier: processID), !app.isTerminated, app.bundleIdentifier == bundle else {
-                throw CaptureError.message("Selected app exited or changed before capture began")
-            }
-        }
-        let roots = processID.map { Set([$0]) } ?? Set(NSRunningApplication.runningApplications(withBundleIdentifier: bundle).map(\.processIdentifier))
-        guard roots.count <= 1 else { throw CaptureError.message("Multiple running apps have bundle identifier \(bundle); choose a unique application") }
-        let matches = try apps().filter { app in
-            app.bundleID == bundle || app.bundleID.hasPrefix(bundle + ".") || isDescendant(app.pid, of: roots)
-        }
-        guard !matches.isEmpty else { throw CaptureError.message("No audio process found for \(bundle). Open the app and start audio first; run capture-it apps.") }
-        if roots.isEmpty && matches.filter({ $0.bundleID == bundle }).count > 1 {
-            throw CaptureError.message("\(bundle) is shared by several audio helpers; select their owning application's bundle identifier")
-        }
-        return matches
-    }
-
     private static func isDescendant(_ pid: pid_t, of roots: Set<pid_t>) -> Bool {
         var current = pid
         for _ in 0 ..< 32 {
@@ -130,11 +111,13 @@ public enum Hardware {
         return devices
     }
 
-    static func selectMicrophone(explicitUID: String?, bundle: String, processID: pid_t?) throws -> MicrophoneChoice {
+    static func selectMicrophone(explicitUID: String?, targets: [AppChoice]) throws -> MicrophoneChoice {
         let available = try devices()
         var active: Set<UInt32>?
         if explicitUID == nil {
-            do { active = try activeInputDevices(bundle: bundle, processID: processID) }
+            do { active = try targets.reduce(into: Set<UInt32>()) { ids, target in
+                ids.formUnion(try activeInputDevices(bundle: target.bundleID, processID: target.pid > 0 ? target.pid : nil))
+            } }
             catch { active = nil } // Optional passive probe; the documented fallback is the default.
         }
         return try MicrophonePolicy.choose(explicitUID: explicitUID, devices: available, activeAppDevices: active,

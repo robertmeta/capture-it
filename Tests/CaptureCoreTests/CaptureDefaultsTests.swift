@@ -55,16 +55,26 @@ final class CaptureDefaultsTests: XCTestCase {
         XCTAssertEqual(CaptureHome(override: selected, environment: ["CAPTURE_IT_VOICES": previous.path]).voices.path, previous.path)
     }
 
+    func testRolloverBeforeRIFFLimit() {
+        let boundary: Int64 = 4 * 3600 * 48000
+        XCTAssertFalse(CaptureDefaults.needsRollover(frames: boundary - 1))
+        XCTAssertTrue(CaptureDefaults.needsRollover(frames: boundary))
+    }
+
     func testDefaultOutputIsLocalDatedAndAvoidsExistingDirectory() throws {
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent("capture-it-default-\(UUID())")
         try privateDirectory(parent)
         defer { try? FileManager.default.removeItem(at: parent) }
-        let first = CaptureDefaults.output(query: "*Teams*", appName: "Microsoft Teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: 0)!)
+        let first = try CaptureDefaults.reserve(stem: "teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: 0)!)
         XCTAssertEqual(first.deletingLastPathComponent().path, parent.path)
-        XCTAssertEqual(first.lastPathComponent, "teams-19700101-000000")
-        try privateDirectory(first)
-        let next = CaptureDefaults.output(query: "*Teams*", appName: "Microsoft Teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: 0)!)
-        XCTAssertEqual(next.lastPathComponent, "teams-19700101-000000-2")
+        XCTAssertEqual(first.lastPathComponent, "teams-1970-01-01-01")
+        let next = try CaptureDefaults.reserve(stem: "teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertEqual(next.lastPathComponent, "teams-1970-01-01-02")
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        try privateDirectory(parent.appendingPathComponent("teams-1970-01-01-99"))
+        let hundredth = try CaptureDefaults.reserve(stem: "teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: 0)!)
+        XCTAssertEqual(hundredth.lastPathComponent, "teams-1970-01-01-100")
+        let local = try CaptureDefaults.reserve(stem: "teams", directory: parent, date: Date(timeIntervalSince1970: 0), timeZone: TimeZone(secondsFromGMT: -18000)!)
+        XCTAssertEqual(local.lastPathComponent, "teams-1969-12-31-01")
     }
 }

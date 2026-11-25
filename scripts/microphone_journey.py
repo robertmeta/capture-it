@@ -12,7 +12,8 @@ binary = str(Path(sys.argv[1]).resolve())
 root = (Path(".build/microphone-journey") / str(time.time_ns())).resolve()
 root.mkdir(parents=True)
 probe = root / "mic-probe"
-sources = sorted(str(path) for path in Path("Sources/CaptureCore").glob("*.swift"))
+sources = [str(Path("Sources/CaptureCore") / (name + ".swift")) for name in
+           ("AppSelection", "AudioHardware", "CaptureDefaults", "MeetingMetadata", "Types")]
 subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library", "-target", "arm64-apple-macos26.0", *sources, "Support/MicrophoneProbe.swift", "-o", str(probe)], check=True)
 devices = json.loads(subprocess.check_output([binary, "devices", "--json"], text=True))
 default = next(device for device in devices if device["isDefault"])
