@@ -5,6 +5,8 @@ import Darwin
 import FluidAudio
 import FluidHookSupport
 import Foundation
+import OSLog
+import Synchronization
 
 private struct ModelSpec: Decodable {
     let repository: String
@@ -18,6 +20,51 @@ private struct ModelManifest: Decodable {
     let repository: String
     let revision: String
     let files: [File]
+}
+
+/// Return CPU-owned feature arrays so long offline loops can release Core ML
+/// surfaces after each prediction. Debug tracing records only model call counts.
+private final class AutoreleaseModel: MLModel, @unchecked Sendable {
+    private let wrapped: MLModel
+    private let name: String
+    private let calls = Mutex<Int>(0)
+    private let logger = Logger(subsystem: "com.robertmeta.capture-it.fluid", category: "predictions")
+    init(_ wrapped: MLModel, name: String) {
+        self.wrapped = wrapped
+        self.name = name
+        super.init()
+    }
+    private func trace(_ operation: String, batch: Int) {
+        let count = calls.withLock { value in value += 1; return value }
+        if count == 1 || count.isMultiple(of: 512) {
+            logger.debug("\(self.name, privacy: .public) \(operation, privacy: .public) call=\(count) batch=\(batch)")
+        }
+    }
+    override func __prediction(fromFeatures input: MLFeatureProvider, options: MLPredictionOptions,
+                               completionHandler: @escaping (MLFeatureProvider?, Error?) -> Void) {
+        trace("async", batch: 1)
+        wrapped.__prediction(fromFeatures: input, options: options) { output, error in
+            guard let output else { completionHandler(nil, error); return }
+            do { completionHandler(try autoreleasepool { try ModelFeatures.owned(output) }, nil) }
+            catch { completionHandler(nil, error) }
+        }
+    }
+    override var modelDescription: MLModelDescription { wrapped.modelDescription }
+    override var configuration: MLModelConfiguration { wrapped.configuration }
+    override func prediction(from input: MLFeatureProvider, options: MLPredictionOptions) throws -> MLFeatureProvider {
+        trace("single", batch: 1)
+        return try autoreleasepool {
+            try ModelFeatures.owned(wrapped.prediction(from: input, options: options))
+        }
+    }
+    override func predictions(from inputBatch: MLBatchProvider, options: MLPredictionOptions) throws -> MLBatchProvider {
+        trace("batch", batch: inputBatch.count)
+        return try autoreleasepool {
+            let outputs = try wrapped.predictions(from: inputBatch, options: options)
+            let copies = try (0..<outputs.count).map { index in try ModelFeatures.owned(outputs.features(at: index)) }
+            return MLArrayBatchProvider(array: copies)
+        }
+    }
 }
 
 @main struct FluidHook {
@@ -182,7 +229,8 @@ private struct ModelManifest: Decodable {
         let all = MLModelConfiguration(); all.computeUnits = .all
         let cpu = MLModelConfiguration(); cpu.computeUnits = .cpuOnly
         func model(_ name: String, _ config: MLModelConfiguration) throws -> MLModel {
-            try MLModel(contentsOf: directory.appendingPathComponent(name + ".mlmodelc"), configuration: config)
+            let loaded = try MLModel(contentsOf: directory.appendingPathComponent(name + ".mlmodelc"), configuration: config)
+            return AutoreleaseModel(loaded, name: name)
         }
         struct Parameters: Decodable {
             struct Tensor: Decodable { let data_base64: String }

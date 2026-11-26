@@ -193,3 +193,7 @@ those model terms.
 M4A recordings use the same offline pipeline. Standalone mono and stereo
 imports retain their source sample rate and are resampled to 16 kHz for
 analysis. The helper reads the session manifest to find its saved audio.
+
+Model output tensors are copied into owned CPU buffers between inference calls.
+This keeps long imports from retaining Core ML surfaces through feature accessors.
+Prediction counters are available in the helper’s debug logs.
