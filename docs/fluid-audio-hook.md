@@ -102,7 +102,9 @@ Each run writes into its normal `SESSION/hooks/UUID/NNN/` directory:
 | `speaker-transcript.txt` | Readable speaker-labeled copy, preserving original words and phrase times |
 | `stdout.log`, `stderr.log` | Existing hook-runner logs |
 
-A meeting with no detected speech produces an empty speaker and turn list.
+Speaker intervals are trimmed to the source duration so padded model windows
+cannot export timestamps beyond the audio. A meeting with no detected speech
+produces an empty speaker and turn list.
 The completion JSON is written last. A failure can leave partial derived files;
 the generic hook result records failure. Retrying creates a new run directory.
 Audio-only sessions produce the diarization artifacts without inventing text.

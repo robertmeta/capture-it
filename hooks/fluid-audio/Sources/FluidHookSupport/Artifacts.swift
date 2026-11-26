@@ -34,6 +34,18 @@ public struct SpeakerTurn: Codable, Sendable, Equatable {
     public init(start: Double, end: Double, speaker: String) {
         self.start = start; self.end = end; self.speaker = speaker
     }
+
+    /// Intersect padded model windows with the source audio before exporting turns.
+    /// A turn entirely in model padding has no source samples and is omitted.
+    public func clipped(to duration: Double) throws -> SpeakerTurn? {
+        guard duration.isFinite, duration >= 0, start.isFinite, end.isFinite, end >= start else {
+            throw HookFailure("Diarizer returned an invalid time range: start=\(start), end=\(end), sourceDuration=\(duration)")
+        }
+        let first = max(0, start)
+        let last = min(end, duration)
+        guard last > first else { return nil }
+        return SpeakerTurn(start: first, end: last, speaker: speaker)
+    }
 }
 
 /// Original phrase data; timing and text are retained without guessing word boundaries.

@@ -53,4 +53,17 @@ final class AttributionTests: XCTestCase {
         try file.read(into: read)
         XCTAssertEqual(read.floatChannelData![0][8000], 0.25, accuracy: 0.001)
     }
+    func testModelPaddingIsClippedToSourceSamples() throws {
+        let duration = 1010.219625
+        let turn = SpeakerTurn(start: 1007.2665405273438, end: 1010.3225708007812, speaker: "S1")
+        let clipped = try XCTUnwrap(turn.clipped(to: duration))
+        XCTAssertEqual(clipped.start, turn.start)
+        XCTAssertEqual(clipped.end, duration)
+        XCTAssertEqual(clipped.speaker, turn.speaker)
+        XCTAssertNil(try SpeakerTurn(start: duration, end: duration + 1, speaker: "S1").clipped(to: duration))
+        XCTAssertEqual(try SpeakerTurn(start: -0.1, end: 1, speaker: "S1").clipped(to: 2)?.start, 0)
+        XCTAssertThrowsError(try SpeakerTurn(start: 2, end: 1, speaker: "S1").clipped(to: duration))
+        XCTAssertThrowsError(try SpeakerTurn(start: 0, end: .infinity, speaker: "S1").clipped(to: duration))
+    }
+
 }

@@ -84,13 +84,9 @@ private struct ModelManifest: Decodable {
         catch OfflineDiarizationError.noSpeechDetected { result = DiarizationResult(segments: []) }
         let elapsed = began.duration(to: .now).components
         let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
-        let turns = try result.segments.map { segment -> SpeakerTurn in
-            let start = Double(segment.startTimeSeconds)
-            let end = Double(segment.endTimeSeconds)
-            guard start.isFinite, end.isFinite, start >= 0, end >= start, end <= duration + 0.1 else {
-                throw HookFailure("Diarizer returned an invalid time range")
-            }
-            return SpeakerTurn(start: start, end: min(end, duration), speaker: String(describing: segment.speakerId))
+        let turns = try result.segments.compactMap { segment in
+            try SpeakerTurn(start: Double(segment.startTimeSeconds), end: Double(segment.endTimeSeconds),
+                            speaker: String(describing: segment.speakerId)).clipped(to: duration)
         }.sorted { ($0.start, $0.end, $0.speaker) < ($1.start, $1.end, $1.speaker) }
         let references = try SpeakerReview.references(revision: spec.revision)
         var labels: [String: Identity] = [:]
