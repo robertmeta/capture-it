@@ -164,4 +164,4 @@ struct Manifest: Codable {
     var meeting: MeetingMetadata? = nil
 }
 
-public let captureItVersion = "0.5.0"
+public let captureItVersion = "0.6.0"

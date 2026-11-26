@@ -110,13 +110,14 @@ private struct ModelManifest: Decodable {
             let version = 1
             let speakerReviewVersion = 1
             let meetingReviewVersion = 1
+            let m4aAudioVersion = 1
             let engine = "FluidAudio offline Community-1/VBx"
             let sourceWav: String
             let modelRepository: String
             let modelRevision: String
             let duration: Double
             let processingSeconds: Double
-            let analysisMix = "0.25*app-left + 0.25*app-right + 0.5*microphone; 16000 Hz mono"
+            let analysisMix = "three channels: 0.25*left + 0.25*right + 0.5*mic; stereo: equal average; mono: direct; 16000 Hz"
             let timebase = "seconds from recording start"
             let speakers: [String]
             let turns: [SpeakerTurn]

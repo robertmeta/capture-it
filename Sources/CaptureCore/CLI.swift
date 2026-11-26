@@ -4,7 +4,7 @@ import Foundation
 
 public enum CLI {
     public static let help = """
-    capture-it \(captureItVersion) — app audio + microphone, WAV + live local transcript
+    capture-it \(captureItVersion) — app audio + microphone, M4A + live local transcript
 
     Usage:
       capture-it NAME_OR_PATTERN [NAME_OR_PATTERN ...] [record options]
@@ -14,7 +14,7 @@ public enum CLI {
       capture-it setup-speech [--locale en-US]   # explicit Apple model download
       capture-it setup-accessibility           # request window-title permission
       capture-it record [NAME_OR_PATTERN ... | --app NAME_OR_PATTERN] [options]
-      capture-it transcribe SESSION_DIRECTORY [--out DIRECTORY] [--locale en-US]
+      capture-it transcribe SESSION_DIRECTORY_OR_AUDIO_FILE [--out DIRECTORY] [--locale en-US]
       capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
 
       capture-it people                         # remembered names and sample counts
@@ -32,6 +32,7 @@ public enum CLI {
                              One match auto-selects; multiple matches prompt
       --home DIRECTORY       Default: ~/Documents/capture-it (or CAPTURE_IT_HOME)
       --out DIRECTORY        Exact session folder; default: HOME/recordings/APPS-YYYY-MM-DD-01
+      --format m4a|wav       Saved audio format; default: lossless M4A
       --no-review            Skip the interactive speaker prompts after analysis
       --mic DEVICE_UID       Override app input detection / system-default fallback
       --locale LOCALE        Default: en-US
@@ -46,13 +47,15 @@ public enum CLI {
     selects a saved transcript directory; otherwise use the session's transcript.
 
     Final transcript lines are teed to stdout and DIRECTORY/transcript.txt.
-    The WAV shares the numbered meeting's name. Its channels are selected apps L/R and microphone.
+    The saved M4A shares the numbered meeting's name. Its channels are selected apps L/R and microphone.
+    Capture checkpoints a recovery WAV, then saves lossless M4A when the meeting ends.
+    Transcribe also accepts M4A/WAV/MP3/AIFF/CAF files with one, two or three channels.
     One mono downmix feeds a single live transcription stream.
-    WAV, transcript file and stdout workers run independently with bounded queues.
+    Audio, transcript file and stdout workers run independently with bounded queues.
     Status and errors go to stderr. Capture/speech never upload audio.
     After make setup, the installed FluidAudio hook runs locally after saving.
-    First Ctrl-C saves WAV, finishes speech, then labels; Ctrl-C again skips/cancels.
-    In a terminal, n starts a new meeting WAV; q saves and quits. Neither key needs Enter.
+    First Ctrl-C saves audio, finishes speech, then labels; Ctrl-C again skips/cancels.
+    In a terminal, n starts a new meeting recording; q saves and quits. Neither key needs Enter.
     Repeated q never cancels finishing work. Escape has no stop action.
     FluidAudio runs before explicit hooks unless you place it explicitly yourself.
     Explicit hooks run your code and may use remote agents.
@@ -154,8 +157,11 @@ public enum CLI {
             process.waitUntilExit()
             return process.terminationStatus
         case "record":
-            try args.validate(allowed: ["--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...Int.max)
+            try args.validate(allowed: ["--format", "--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--hook", "--hook-timeout", "--title"], positionals: 0...Int.max)
             let hooks = try args.hookOptions(home: home)
+            guard let container = RecordingContainer(rawValue: args.values["--format"] ?? "m4a") else {
+                throw CaptureError.message("--format must be m4a or wav")
+            }
             if let title = args.values["--title"], MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
             guard args.values["--app"] == nil || args.positionals.isEmpty else { throw CaptureError.message("Use either a positional app name or --app, not both") }
             let queries = args.values["--app"].map { [$0] } ?? args.positionals
@@ -179,6 +185,7 @@ public enum CLI {
                                         microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US",
                                         transcribe: !args.flags.contains("--no-transcribe"), duration: duration,
                                         processID: targets[0].pid, hooks: hooks, title: args.values["--title"])
+            options.container = container
             options.targets = targets
             options.meetingStem = stems.joined(separator: "-")
             options.numberFirstMeeting = exact == nil

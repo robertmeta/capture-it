@@ -1,3 +1,4 @@
+import CapturePaths
 import AVFoundation
 import AppKit
 import Darwin
@@ -14,6 +15,7 @@ public struct RecordOptions: Sendable {
     public var processID: pid_t?
     public var hooks: HookOptions
     public var title: String?
+    var container: RecordingContainer = .m4a
     var targets: [AppChoice] = []
     var meetingStem: String?
     var numberFirstMeeting = false
@@ -215,18 +217,43 @@ public enum Sessions {
         return !workers.contains(where: \.hasFailed) && !shutdown.interrupted
     }
 
-    public static func transcribe(session: URL, output: URL?, locale: String, hooks: HookOptions = HookOptions()) async throws -> Int32 {
+    public static func transcribe(session source: URL, output: URL?, locale: String, hooks: HookOptions = HookOptions()) async throws -> Int32 {
         try hooks.validate()
+        var inputSession = source
+        var imported = false
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: inputSession.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+            let original = inputSession
+            let directory: URL
+            if let output {
+                directory = output
+                try privateDirectory(directory)
+            } else {
+                let parent = CaptureHome(override: hooks.home).recordings
+                directory = try CaptureDefaults.reserve(stem: CaptureDefaults.stem(original.deletingPathExtension().lastPathComponent, fallback: "import"), directory: parent)
+            }
+            let chunk = try SavedAudio.importFile(original, to: directory)
+            var manifest = Manifest(app: "imported-audio", microphone: "none", locale: locale)
+            manifest.chunks = [chunk]
+            manifest.recording = "complete"
+            manifest.transcription = "disabled"
+            manifest.stopReason = "import"
+            try atomicJSON(manifest, at: directory.appendingPathComponent("session.json"))
+            diagnostic("Imported audio → \(directory.path)")
+            inputSession = directory
+            imported = true
+        }
+        let session = inputSession
         let data = try Data(contentsOf: session.appendingPathComponent("session.json"))
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
         guard !manifest.chunks.isEmpty else { throw CaptureError.message("Session contains no saved audio chunks") }
-        guard manifest.chunks.count == 1, manifest.chunks[0].source == .recording, manifest.chunks[0].channels == 3 else {
+        guard manifest.chunks.count == 1, manifest.chunks[0].source == .recording, (1...3).contains(manifest.chunks[0].channels) else {
             throw CaptureError.message("This session uses the older separate-track format. Create a new three-channel recording; the old files are unchanged.")
         }
         let status = await LocalSpeech.status(locale: locale)
         guard status.ready else { throw CaptureError.message("Local speech unavailable: \(status.assets). No model was downloaded; audio is unchanged.") }
-        let directory = output ?? session.appendingPathComponent("transcripts/\(UUID().uuidString)")
-        try privateDirectory(directory)
+        let directory = imported ? session : (output ?? session.appendingPathComponent("transcripts/\(UUID().uuidString)"))
+        if !imported { try privateDirectory(directory) }
         let issues = Issues()
         let tee = try TranscriptTee(directory: directory, issues: issues)
         tee.start()
@@ -273,9 +300,21 @@ public enum Sessions {
         diagnostic("Finishing transcription; Ctrl-C to skip waiting.")
         let complete = await finishRecognition(workers, shutdown: stop.state) && !stoppedEarly && issues.all.isEmpty
         try tee.finish(complete: complete, shutdown: stop.state)
+        if imported {
+            var updated = manifest
+            updated.transcription = complete ? "complete" : "incomplete"
+            updated.issues = issues.all
+            try atomicJSON(updated, at: session.appendingPathComponent("session.json"))
+        }
         var hooksComplete = false
         do { hooksComplete = try await HookRunner.run(session: session, transcriptDirectory: directory, options: hooks, shutdown: stop.state).complete }
         catch { issues.add("Post-session hooks failed: \(error)") }
+        if imported {
+            var updated = manifest
+            updated.transcription = complete ? "complete" : "incomplete"
+            updated.issues = issues.all
+            try atomicJSON(updated, at: session.appendingPathComponent("session.json"))
+        }
         for issue in issues.all { diagnostic(issue) }
         diagnostic("Transcript saved to \(directory.path)")
         return complete && hooksComplete && !stop.state.interrupted && !tee.hasFailed && issues.all.isEmpty ? 0 : 2

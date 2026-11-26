@@ -31,7 +31,7 @@ flowchart LR
     AQ --> C[Timestamp assembly worker]
     MQ --> C
     C --> WQ[Bounded WAV queue]
-    WQ --> W[One WAV per meeting: L / R / mic]
+    WQ --> W[Recovery WAV per meeting: L / R / mic]
     C --> RQ[Bounded speech queue]
     RQ --> R[Explicit mono downmix + one analyzer]
     R --> T[Bounded transcript mailbox]
@@ -64,7 +64,7 @@ The analyzer input has a 128-buffer limit. Transcript and stdout queues each
 hold at most 512 segments; transcript text is not retained in an unbounded
 in-memory array.
 
-The single PCM16 WAV uses WAVE_FORMAT_EXTENSIBLE with discrete channels,
+The capture worker writes a PCM16 recovery WAV using WAVE_FORMAT_EXTENSIBLE with discrete channels,
 periodic header checkpoints and an explicit RIFF size guard. At four hours the assembler routes the next complete packet to a fresh meeting. The manifest declares app-left/app-right/microphone order and input
 sample counts. Different player downmix rules do not affect the explicit
 recognition downmix. v0.1 separate-file replay is rejected without changing
@@ -82,6 +82,13 @@ The recording lifecycle is starting → recording → stopping → complete/fail
 Transcription has independent disabled/unavailable/running/complete/incomplete/interrupted
 states. Every failure is attached to the session. Model, queue and transcript
 failures do not invalidate successfully saved audio.
+
+Saved meetings default to ALAC M4A. A bounded native AVAudioFile conversion
+validates channel count, rate and frames before publishing the M4A path in the
+manifest and removing the recovery WAV. `--format wav` keeps the WAV.
+Standalone audio input becomes a session, copying M4A bytes or encoding decoded
+PCM for other formats. Speech and FluidAudio accept mono, stereo and capture
+three-channel mixes.
 
 Shutdown stops native producers first, drains input queues through the assembler,
 and closes the WAV writer. Audio completion is persisted before waiting for speech.
@@ -132,3 +139,5 @@ Decisions: [Use independent bounded workers](adr/0001-native-concurrent-cli.md),
 and [store one multichannel WAV](adr/0003-single-multichannel-wav.md).
 
 [Meeting rotation, output names and app reconnection](adr/0014-continuous-meeting-capture.md).
+
+[M4A storage and audio-file inputs](adr/0015-m4a-recordings-and-audio-input.md).

@@ -82,7 +82,9 @@ def frames(session):
 
 
 def levels(session, offset):
-    with wave.open(str(wav(session))) as audio:
+    decoded = session / ".test-decode.wav"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(wav(session).with_suffix(".m4a")), "-c:a", "pcm_s16le", str(decoded)], check=True)
+    with wave.open(str(decoded)) as audio:
         rate = audio.getframerate()
         audio.setpos(offset)
         raw = audio.readframes(rate // 2)
@@ -92,7 +94,9 @@ def levels(session, offset):
             angle = 2 * math.pi * hz / rate
             return abs(sum(value * complex(math.cos(i*angle), math.sin(i*angle))
                            for i, value in enumerate(values))) * 2 / len(values)
-        return [amplitude(hz) for hz in (440, 660, 1000)]
+        result = [amplitude(hz) for hz in (440, 660, 1000)]
+    decoded.unlink()
+    return result
 
 
 try:
@@ -133,9 +137,12 @@ try:
         assert manifest["recording"] == "complete" and manifest["stopReason"] == reason
         assert manifest["apps"] == ["com.robertmeta.capture-it.fixture.meetalpha", "com.robertmeta.capture-it.fixture.meetbeta"]
         chunk, = manifest["chunks"]
-        assert chunk["file"] == wav(session).name and chunk["closed"]
-        with wave.open(str(wav(session))) as audio:
-            assert audio.getnchannels() == 3 and audio.getnframes() == chunk["frames"]
+        assert chunk["file"] == wav(session).with_suffix(".m4a").name and chunk["closed"]
+        info = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(wav(session).with_suffix(".m4a"))]))
+        stream, = info["streams"]
+        assert stream["codec_name"] == "alac" and stream["channels"] == 3
+        assert int(stream["duration_ts"]) == chunk["frames"]
+        assert not wav(session).exists()
         assert list(session.glob("hooks/*/*/finished"))
     a, b, other = levels(first, 48000)
     assert min(a, b) > 10 * max(1, other), (a, b, other)
@@ -150,8 +157,25 @@ try:
                    stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=20)
     third = first.with_name(first.name[:-2] + "03")
     restarted = json.loads((third / "session.json").read_text())
-    assert restarted["stopReason"] == "duration" and restarted["chunks"][0]["file"] == wav(third).name
-    print(f"passed: bottom controls, numbered WAVs, overlapping hook/capture, app isolation through exit and relaunch: {work}")
+    assert restarted["stopReason"] == "duration" and restarted["chunks"][0]["file"] == wav(third).with_suffix(".m4a").name
+    failed = work / "conversion-failure"
+    with (work / "conversion-failure.log").open("w") as errors:
+        child = subprocess.Popen([binary, "MeetAlpha", "--out", str(failed), "--duration", "2",
+                                  "--no-fluid", "--no-transcribe"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=errors)
+        wait_for(lambda: (failed / "recording.wav").exists())
+        conflict = failed / "recording.m4a"
+        conflict.write_bytes(b"existing file must survive")
+        child.wait(timeout=20)
+        assert child.returncode == 1
+    manifest = json.loads((failed / "session.json").read_text())
+    assert manifest["recording"] == "failed" and manifest["chunks"][0]["file"] == "recording.wav"
+    assert any("M4A finalization failed" in issue for issue in manifest["issues"])
+    assert conflict.read_bytes() == b"existing file must survive"
+    with wave.open(str(failed / "recording.wav")) as audio:
+        assert audio.getnframes() == manifest["chunks"][0]["frames"] > 0
+    assert not list(failed.glob(".encoding-*"))
+    print(f"passed: recoverable M4A conversion failure, bottom controls, numbered M4As, overlapping hook/capture, app isolation through exit and relaunch: {work}")
 finally:
     release.touch()
     if child is not None and child.poll() is None:

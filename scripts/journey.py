@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix="capture-it-journey-") as directory:
     assert "either a positional app name or --app" in result.stderr
     result = run("invalid-capture-it-no-match", expected=1)
     assert "No running app matches" in result.stderr
+assert "--format must be" in run("record", "--format", "mp4", "--app", "unused", expected=1).stderr
 run("record", "--out", "example", expected=1)
 run("apps", "--unknown", "x", expected=1)
 run("apps", "--json", "--json", expected=1)

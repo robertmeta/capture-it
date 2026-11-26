@@ -69,7 +69,7 @@ while not Path(''' + repr(str(release)) + ''').exists():
         original = None
     errors = work / "stderr.txt"
     with errors.open("w") as stderr, (work / "stdout.txt").open("w") as stdout:
-        child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.quitkeys",
+        child = subprocess.Popen([binary, "record", "--format", "wav", "--app", "com.robertmeta.capture-it.fixture.quitkeys",
                                   "--out", str(session), "--hook", str(hook)],
                                  stdin=reader, stdout=stdout, stderr=stderr,
                                  preexec_fn=controlling_terminal if terminal else None)

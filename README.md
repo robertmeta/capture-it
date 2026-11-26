@@ -2,7 +2,7 @@
 
 ![capture-it — app audio, mic, words](docs/assets/capture-it.svg)
 
-**Record selected apps and your microphone from the terminal, with a WAV and live transcript for each meeting.**
+**Record selected apps and your microphone from the terminal, with an M4A and live transcript for each meeting.**
 
 Record a meeting without adding another desktop app to your day. Capture playback from one or more
 macOS applications and a microphone while Apple's on-device speech
@@ -42,7 +42,7 @@ capture-it teams
 ```
 
 Each recording gets a numbered folder under `~/Documents/capture-it/recordings/`.
-The WAV grows while finalized phrases appear on screen and in `transcript.txt`.
+The recovery WAV grows while finalized phrases appear on screen and in `transcript.txt`.
 
 To keep Teams and Slack ready throughout the day, run:
 
@@ -50,11 +50,11 @@ To keep Teams and Slack ready throughout the day, run:
 capture-it teams slack
 ```
 
-Press **`n` for a new meeting**. Capture continues into the next WAV while
+Press **`n` for a new meeting**. Capture continues into the next recording while
 FluidAudio and other configured hooks process the previous meeting in the
 background. Press **`q` to save and quit**. Both keys work without Enter.
-For example, the first WAV on November 25 is
-`teams-slack-2026-11-25-01/teams-slack-2026-11-25-01.wav`. The next meeting
+For example, the first M4A on November 25 is
+`teams-slack-2026-11-25-01/teams-slack-2026-11-25-01.m4a`. The next meeting
 that day uses `-02`, including when you restart the CLI. Numbering starts at
 `01` for each local date and ordered set of app search terms.
 
@@ -112,10 +112,10 @@ capture-it teams
 `make setup` installs the CLI and FluidAudio helper in `~/bin`, with its runtime
 resources beside the helper, and downloads pinned models for offline use.
 It requires Swift 6.2+. Use `BINDIR` to change the install location for both tools.
-Run `make setup` when upgrading an older speaker helper to review numbered WAVs.
+Run `make setup` when upgrading an older speaker helper to review M4A recordings.
 Apple speech assets are separate: use `setup-speech` above if needed.
 
-Once installed, FluidAudio runs automatically **after the WAV and live transcript
+Once installed, FluidAudio runs automatically **after the audio and live transcript
 finish saving**, including after the first Ctrl-C. It writes a separate
 speaker-labeled transcript; live text still appears without speaker labels.
 Ctrl-C again skips or cancels the remaining processing. To skip automatic labels:
@@ -153,7 +153,7 @@ Names appear after saving. [Voice library and matching details](docs/fluid-audio
 ### Capture home
 
 The default home is `~/Documents/capture-it`. Each call gets a folder under
-`recordings/` containing its WAV, manifest, available transcripts, and hook
+`recordings/` containing its audio, manifest, available transcripts, and hook
 results. New voice libraries live under `voices/`. Existing recordings can
 still be opened by path. An existing default voice library in Application
 Support continues to be used with the default configuration.
@@ -173,12 +173,12 @@ library. macOS may sync Documents if you have enabled iCloud Drive for it.
   `capture-it speakers SESSION_DIRECTORY`.
 - **q:** in a foreground interactive terminal, start a graceful stop without
   Enter. Further `q` presses never skip transcription or cancel hooks.
-- **Ctrl-C once:** stop capture, drain audio and finalize the WAV. Finish pending
+- **Ctrl-C once:** stop capture, drain audio and finalize the audio. Finish pending
   transcription, flush text, run installed FluidAudio, then your selected hooks.
 - **Ctrl-C again:** skip remaining speech processing, cancel a running hook and
   skip later hooks. Audio still finishes saving first; written text is retained.
 
-The CLI announces when the WAV is saved. Speech finalization has no fixed cutoff;
+The CLI announces when audio is saved. Speech finalization has no fixed cutoff;
 you can interrupt again to stop waiting. After an automatic stop, Ctrl-C also
 cancels remaining processing. SIGTERM follows the same shutdown path.
 Escape has no stop action. Keyboard input is enabled after app selection and
@@ -238,9 +238,9 @@ capture-it transcribe ~/Documents/capture-it/recordings/teams-2026-11-25-01
 ```
 
 `capture-it record teams` and `capture-it record --app teams` also work.
-Default folder and WAV names use the sanitized search terms, local date and
+Default folder and audio names use the sanitized search terms, local date and
 next occurrence. `--out ./planning` selects that exact first folder and uses
-`planning/recording.wav`. Pressing `n` then creates a numbered sibling folder.
+`planning/recording.m4a`. Pressing `n` then creates a numbered sibling folder.
 Capture folders and files use private permissions.
 
 ## Meeting title
@@ -264,7 +264,7 @@ speaker-name adapter is included. See the [speaker attribution research](docs/sp
 
 | File | Contents |
 | --- | --- |
-| `<meeting>.wav` | 48 kHz PCM16 audio with selected apps mixed to stereo and one microphone channel |
+| `<meeting>.m4a` | Lossless ALAC audio at 48 kHz with selected apps L/R and microphone in three channels |
 | `session.json` | Selected app bundle IDs, mic, title evidence, channel layout, counts, stop reason and issues |
 | `transcript.txt` | Finalized timestamped lines, appended and synced while recording |
 | `transcript.jsonl` | The same segments with source, start time, duration and text |
@@ -281,20 +281,46 @@ Read ~/Documents/capture-it/recordings/teams-2026-11-25-01/transcript.txt. Summa
 open questions and action items, keeping names only where stated.
 ```
 
-The WAV stores three discrete channels using WAVE_FORMAT_EXTENSIBLE. App L/R
-stay separate; mic channels are averaged into the third channel. All share one
-host-clock timeline, with silence for missing intervals. Speech receives an
-explicit mono mix: `0.25*L + 0.25*R + 0.5*mic`. Some stereo players ignore the
-third channel; use an editor that supports discrete multichannel audio.
+New recordings save as **M4A with Apple Lossless (ALAC)**. The app left, app
+right and microphone channels retain their original PCM16 samples and frame
+count. Live speech uses `0.25*L + 0.25*R + 0.5*mic`. Choose WAV explicitly with:
+
+```sh
+capture-it teams slack --format wav
+```
+
+While capture runs, a checkpointed recovery WAV keeps the audio readable. After
+each meeting ends, a separate worker writes and validates the M4A, updates
+`session.json`, then removes that recovery WAV. A conversion failure retains
+the WAV and records the issue. Allow temporary space for both files during
+finalization. ALAC size depends on the audio, so the previous PCM disk budget
+still applies while recording.
+
+### Use existing audio
+
+Pass a standalone M4A directly to transcription:
+
+```sh
+capture-it transcribe ./meeting.m4a --out ./imported-meeting
+capture-it speakers ./imported-meeting
+```
+
+This creates a saved session with audio, metadata, transcripts and configured
+hook results. Existing M4A files are copied byte for byte. WAV, MP3, AIFF and CAF
+inputs are decoded into lossless M4A. Inputs may have one, two or three channels.
+Mono stays mono and stereo is averaged for speech analysis. Three-channel input
+uses capture-it's app L/R/mic mix. Original input files stay at their source paths.
+
+Existing WAV session folders still work with `transcribe`, `hooks` and `speakers`.
 
 ### Query recordings with jq
 
 Use JSONL for transcripts. Each line is one phrase with its own timestamps, so
 `jq` can filter a meeting as it grows. Use `session.json` for meeting metadata
-and the WAV path. After FluidAudio runs, `speaker-transcript.jsonl` holds
+and the audio path. After FluidAudio runs, `speaker-transcript.jsonl` holds
 speaker IDs per phrase and `speaker-identities.json` maps known IDs to names.
 
-List saved meetings with their start time, status, apps and WAV filename:
+List saved meetings with their start time, status, apps and audio filename:
 
 ```sh
 recordings="$HOME/Documents/capture-it/recordings"
@@ -327,7 +353,7 @@ analysis run, so use its accompanying identity file.
 ## Post-recording hooks
 
 Choose executable scripts explicitly. They receive JSON containing the saved
-WAV and optional transcript paths, then write into their own private output
+audio and optional transcript paths, then write into their own private output
 folder under `SESSION/hooks/UUID/`. Hooks run in flag order after files finalize;
 their stdout stays in separate logs.
 
@@ -344,7 +370,7 @@ capture-it hooks ~/Documents/capture-it/recordings/teams-2026-11-25-01 --hook ./
 
 See the [hook contract and agy/Claude/Codex examples](docs/hooks.md).
 Agent hooks use the executable, account and model provider you select; that
-provider may be remote or paid. Coding agents are not assumed to decode WAV files.
+provider may be remote or paid. Coding agents are not assumed to decode audio files.
 
 ### FluidAudio speaker labeling
 
@@ -385,9 +411,10 @@ stdout use independent workers and bounded queues.
 - Lost audio buffers, write failures, late timestamps, disconnected
   mic or format changes stop capture with an explicit issue. Devices never
   switch silently, and the app filter never expands to all system audio.
-- At four hours of audio, capture moves to the next numbered WAV automatically,
+- At four hours of audio, capture moves to the next numbered meeting automatically,
   before the RIFF size limit. Budget about **1.04 GB per hour** (8.3 GB for
-  eight hours) for the WAVs, plus space for analysis. The microphone records
+  eight hours) as the uncompressed baseline, plus space for analysis. Final M4A size varies
+  with the audio. The microphone records
   between calls as long as capture is running.
 - WAV headers are checkpointed about once a second. Ctrl-C follows the save
   path; SIGKILL, power loss and hardware faults cannot guarantee finalization.
@@ -408,6 +435,7 @@ make test-native     # real app isolation, mic, WAV and failure paths
 make test-speech     # real local speech, tee and graceful shutdown
 make test-shutdown   # second Ctrl-C during drain
 make test-keys       # real terminal q/repeated q, Ctrl-C and terminal restoration
+make test-m4a        # standalone M4A/WAV input, local ASR and speaker analysis
 make test-meetings   # rotation, background hooks and selected-app relaunch
 make test-selection  # app search and interactive picker
 make test-microphone # active-input probe and safe fallback

@@ -5,7 +5,7 @@ Model-free checks and a real offline multi-voice journey cover its integration;
 speaker accuracy still depends on the recording.
 
 This optional hook uses FluidAudio's offline Community-1/VBx pipeline on the
-saved WAV. It adds anonymous speaker intervals and a derived transcript copy;
+saved audio. It adds anonymous speaker intervals and a derived transcript copy;
 the original recording and transcript are retained. Core capture-it still has
 no external package dependencies. The hook builds as a separate Swift package.
 
@@ -71,7 +71,7 @@ disables automatic selection, including on `transcribe` and `hooks`; explicit
 hooks still run. With FluidAudio installed, the default timeout per hook is
 900 seconds; otherwise it is 300. Set `--hook-timeout` to override it.
 
-First Ctrl-C, or `q` in an interactive recording, stops capture, saves the WAV,
+First Ctrl-C, or `q` in an interactive recording, stops capture, saves the M4A,
 finishes speech and then runs hooks. Repeated `q` never interrupts analysis.
 An automatic stop follows the same path. Second Ctrl-C skips pending analysis
 or terminates a running hook; finalized audio and written text remain available.
@@ -82,7 +82,7 @@ A later notes hook can read the preceding
 result and output directory from `result.json` beside its input JSON. Model
 loading and analysis happen after recording, outside the capture workers.
 
-The hook expects capture-it's three-channel 48 kHz WAV and prepares an explicit
+The hook expects capture-it's M4A or WAV audio and prepares an explicit
 16 kHz mono mix: `0.25*app-left + 0.25*app-right + 0.5*microphone`. Conversion
 uses bounded buffers; FluidAudio processes the derived file through its
 disk-backed API. The temporary analysis WAV is removed on normal return or
@@ -187,3 +187,7 @@ FluidAudio code uses Apache-2.0. The selected Community-1 model artifacts have
 their own CC-BY-4.0 attribution and provenance; setup retains the upstream
 LICENSE, NOTICE and PROVENANCE files. Capture-it's MIT license does not replace
 those model terms.
+
+M4A recordings use the same offline pipeline. Standalone mono and stereo
+imports retain their source sample rate and are resampled to 16 kHz for
+analysis. The helper reads the session manifest to find its saved audio.

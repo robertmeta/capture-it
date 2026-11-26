@@ -4,7 +4,7 @@ The first-party [FluidAudio offline hook](fluid-audio-hook.md) adds anonymous
 speaker turns and conservative labels after recording. Its code/model setup is
 optional and explicit; it uses the same executable contract described below.
 
-Hooks let a terminal program process the saved WAV, or the WAV and transcript.
+Hooks let a terminal program process the saved audio, or the audio and transcript.
 Your hooks are explicit executable files. After `make setup`, the first-party
 `capture-it-fluid` installed beside the CLI is selected automatically; use
 `--no-fluid` to skip it. Arbitrary plugins and agents are never discovered.
@@ -32,7 +32,7 @@ disables automatic selection while retaining explicit hooks.
 
 ## Handoff
 
-Capture closes the WAV and finishes its transcription attempt before hooks run.
+Capture finalizes the audio and finishes its transcription attempt before hooks run.
 Hooks run sequentially in the selected order, in their own processes. Neither the agent
 nor its output participates in the recording worker queues.
 
@@ -44,7 +44,8 @@ Your executable receives one argument: an absolute path to `input.json`:
   "event": "session-finished",
   "sessionDirectory": "/absolute/path/to/session",
   "sessionManifest": "/absolute/path/to/session/session.json",
-  "wav": "/absolute/path/to/session/recording.wav",
+  "audio": "/absolute/path/to/session/recording.m4a",
+  "wav": "/absolute/path/to/session/recording.m4a",
   "transcript": "/absolute/path/to/session/transcript.txt",
   "segments": "/absolute/path/to/session/transcript.jsonl",
   "transcriptSummary": "/absolute/path/to/session/transcript.json",
@@ -62,7 +63,7 @@ Your executable receives one argument: an absolute path to `input.json`:
 ```
 
 Transcript fields are omitted when their files are absent. Audio-only capture
-still invokes hooks with the WAV. Partial transcripts can be passed too; inspect
+still invokes hooks with the audio. Partial transcripts can be passed too; inspect
 completion fields before deciding what to do. `transcriptionStatus` describes
 the original session; when you select a retried transcript, `transcriptComplete`
 comes from that transcript's own summary. A failed capture may supply a closed
@@ -80,7 +81,8 @@ The same handoff includes environment variables:
 | --- | --- |
 | `CAPTURE_IT_EVENT` | Absolute `input.json` path, also passed as argument 1 |
 | `CAPTURE_IT_SESSION` | Session directory |
-| `CAPTURE_IT_WAV` | WAV path |
+| `CAPTURE_IT_AUDIO` | Saved M4A or WAV path |
+| `CAPTURE_IT_WAV` | Compatibility alias for the same audio path |
 | `CAPTURE_IT_TRANSCRIPT` | Text path, or an empty string |
 | `CAPTURE_IT_HOOK_OUTPUT` | Private output directory for this executable |
 
@@ -130,8 +132,8 @@ not a sandbox or a guarantee against a hook intentionally changing its inputs.
 
 The [agent notes example](../examples/hooks/agent-notes.py) supports the locally
 verified print/exec modes of agy, Claude Code and Codex. It passes transcript
-text and a WAV reference, then writes `notes.md` in the hook's output directory.
-It does not attach or upload WAV bytes. A terminal coding agent is not assumed
+text and an audio reference, then writes `notes.md` in the hook's output directory.
+It does not attach or upload audio bytes. A terminal coding agent is not assumed
 to implement an audio decoder, speech recognizer or speaker diarizer.
 
 ```sh
@@ -151,7 +153,14 @@ account you intend to use. No agent example or model-backed request is run by
 capture-it's tests; tests use local deterministic executables. The small notes
 example accepts up to 100 KB of text; longer sessions need a chunking hook.
 
-For a WAV-only pipeline, write a hook that invokes your chosen audio analysis
-tool using `CAPTURE_IT_WAV`. For combined processing, use both that file and the
+For an audio-only pipeline, write a hook that invokes your chosen audio analysis
+tool using `CAPTURE_IT_AUDIO`. For combined processing, use both that file and the
 transcript. See [speaker attribution](speaker-attribution.md) for the distinction
 between anonymous speakers and people's names.
+
+
+The `audio` field and `CAPTURE_IT_AUDIO` environment variable identify the
+saved audio file. Version-1 `wav` and `CAPTURE_IT_WAV` also carry this same
+path for existing consumers. The filename extension may be `.m4a` or `.wav`.
+Use the file extension or decoder metadata to determine its format. Imported
+sessions can contain mono or stereo audio at the source sample rate.

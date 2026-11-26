@@ -10,10 +10,12 @@ final class MeetingRecording: @unchecked Sendable {
     var manifest: Manifest
     private var recognizers: [RecognitionWorker] = []
     private var tee: TranscriptTee?
+    private let container: RecordingContainer
     private var warned: Set<String> = []
 
     init(options: RecordOptions, targets: [AppChoice], microphone: MicrophoneChoice, epoch: Double,
          meeting: MeetingMetadata, first: Bool) throws {
+        container = options.container
         let numbered = options.numberFirstMeeting || !first
         if numbered {
             let parent = options.numberFirstMeeting ? options.output : options.output.deletingLastPathComponent()
@@ -85,8 +87,24 @@ final class MeetingRecording: @unchecked Sendable {
         manifest.recording = audioFailed ? "failed" : "complete"
         if !started && ["starting", "running"].contains(manifest.transcription) { manifest.transcription = "incomplete" }
         try save()
+        if !audioFailed, started, container == .m4a, let original = manifest.chunks.first {
+            do {
+                diagnostic("Saving M4A for \(directory.lastPathComponent)…")
+                let encoded = try SavedAudio.finalize(original, in: directory)
+                manifest.chunks = [encoded]
+                try save()
+                do { try FileManager.default.removeItem(at: directory.appendingPathComponent(original.file)) }
+                catch { issues.add("M4A saved; recovery WAV could not be removed: \(error)") }
+            } catch {
+                audioFailed = true
+                manifest.chunks = [original]
+                manifest.recording = "failed"
+                issues.add("M4A finalization failed; recovery WAV retained: \(error)")
+                try save()
+            }
+        }
         if tee != nil && started {
-            diagnostic("\(audioFailed ? "Audio shutdown finished with issues." : "WAV saved.") Finishing transcription for \(directory.lastPathComponent).")
+            diagnostic("\(audioFailed ? "Audio shutdown finished with issues." : "Audio saved.") Finishing transcription for \(directory.lastPathComponent).")
         }
         let finalized = await Sessions.finishRecognition(recognizers, shutdown: shutdown)
         if manifest.transcription == "running" { manifest.transcription = finalized ? "complete" : "incomplete" }

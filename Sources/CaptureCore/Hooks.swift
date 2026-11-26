@@ -49,6 +49,7 @@ struct HookEvent: Codable {
     let sessionDirectory: String
     let sessionManifest: String
     let wav: String
+    var audio: String? = nil
     let transcript: String?
     let segments: String?
     let transcriptSummary: String?
@@ -63,12 +64,12 @@ struct HookEvent: Codable {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: metadata))
         guard manifest.recording == "complete" || manifest.recording == "failed",
               manifest.chunks.count == 1, let chunk = manifest.chunks.first,
-              chunk.closed, chunk.file == URL(fileURLWithPath: chunk.file).lastPathComponent, chunk.file.hasSuffix(".wav"), chunk.frames > 0 else {
-            throw CaptureError.message("Hooks require one finalized session WAV; recording is unchanged")
+              chunk.closed, chunk.file == URL(fileURLWithPath: chunk.file).lastPathComponent, SavedAudio.extensions.contains(URL(fileURLWithPath: chunk.file).pathExtension.lowercased()), chunk.frames > 0 else {
+            throw CaptureError.message("Hooks require one finalized session audio file; recording is unchanged")
         }
         let wav = directory.appendingPathComponent(chunk.file)
         let audio = try AVAudioFile(forReading: wav)
-        guard audio.length == chunk.frames else { throw CaptureError.message("Saved WAV frame count differs from session metadata") }
+        guard audio.length == chunk.frames else { throw CaptureError.message("Saved audio frame count differs from session metadata") }
         let transcripts = (transcriptDirectory ?? directory).standardizedFileURL
         func existing(_ name: String) -> String? {
             let path = transcripts.appendingPathComponent(name).path
@@ -80,7 +81,7 @@ struct HookEvent: Codable {
         struct Summary: Decodable { let complete: Bool }
         let complete = try summary.map { try JSONDecoder().decode(Summary.self, from: Data(contentsOf: URL(fileURLWithPath: $0))).complete }
         return HookEvent(version: 1, event: "session-finished", sessionDirectory: directory.path,
-                         sessionManifest: metadata.path, wav: wav.path, transcript: text,
+                         sessionManifest: metadata.path, wav: wav.path, audio: wav.path, transcript: text,
                          segments: existing("transcript.jsonl"), transcriptSummary: summary,
                          transcriptComplete: complete, recordingStatus: manifest.recording,
                          transcriptionStatus: manifest.transcription, meeting: manifest.meeting)
@@ -147,6 +148,7 @@ enum HookRunner {
         environment["CAPTURE_IT_EVENT"] = input.path
         environment["CAPTURE_IT_SESSION"] = event.sessionDirectory
         environment["CAPTURE_IT_WAV"] = event.wav
+        environment["CAPTURE_IT_AUDIO"] = event.audio ?? event.wav
         environment["CAPTURE_IT_TRANSCRIPT"] = event.transcript ?? ""
         environment["CAPTURE_IT_HOOK_OUTPUT"] = output.path
         let pid = try spawn(executable: executable.path, arguments: [input.path], environment: environment,
@@ -202,12 +204,15 @@ enum HookRunner {
         struct Capabilities: Decodable {
             let speakerReviewVersion: Int?
             let meetingReviewVersion: Int?
+            let m4aAudioVersion: Int?
             let sourceWav: String?
         }
         let report = session.appendingPathComponent("hooks/\(run)/diarization.json")
         let capabilities = try JSONDecoder().decode(Capabilities.self, from: Data(contentsOf: report))
         let legacyWav = capabilities.sourceWav.map { URL(fileURLWithPath: $0).lastPathComponent == "recording.wav" } ?? false
-        guard capabilities.speakerReviewVersion == 1, capabilities.meetingReviewVersion == 1 || legacyWav else {
+        let m4a = capabilities.sourceWav.map { URL(fileURLWithPath: $0).pathExtension.lowercased() == "m4a" } ?? false
+        guard capabilities.speakerReviewVersion == 1, capabilities.meetingReviewVersion == 1 || legacyWav,
+              !m4a || capabilities.m4aAudioVersion == 1 else {
             diagnostic("Speaker analysis saved. Run make setup to update the helper for interactive review.")
             return true
         }

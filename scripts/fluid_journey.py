@@ -321,7 +321,8 @@ if installed:
         assert child.returncode == 0, (root / "capture-stderr.txt").read_text()
         saved = json.loads((captured / "session.json").read_text())
         assert saved["recording"] == "complete" and saved["transcription"] == "complete"
-        assert saved["chunks"][0]["closed"]
+        assert saved["chunks"][0]["closed"] and saved["chunks"][0]["file"] == "recording.m4a"
+        assert not list(captured.glob("*.wav"))
         assert json.loads((captured / "transcript.json").read_text())["complete"]
         rows = latest_report(captured)
         assert len(rows) == 1 and rows[0]["status"] == "complete"
@@ -330,7 +331,7 @@ if installed:
         event_path = Path(rows[0]["outputDirectory"]).parent / "input.json"
         event = json.loads(event_path.read_text())
         assert event["recordingStatus"] == "complete" and event["transcriptComplete"]
-        print("passed: actual app+mic capture prints live speech; first Ctrl-C saves WAV and final text before automatic FluidAudio writes a labeled copy")
+        print("passed: actual app+mic capture prints live speech; first Ctrl-C saves M4A and final text before automatic FluidAudio writes a labeled copy")
         review_home = root / "record home"
         review_env = dict(os.environ)
         review_env.pop("CAPTURE_IT_VOICES", None)
@@ -356,7 +357,7 @@ if installed:
             saved = json.loads((directory / "session.json").read_text())
             chunk, = saved["chunks"]
             assert saved["recording"] == saved["transcription"] == "complete"
-            assert saved["stopReason"] == reason and chunk["file"] == directory.name + ".wav"
+            assert saved["stopReason"] == reason and chunk["file"] == directory.name + ".m4a"
             assert json.loads((directory / "transcript.json").read_text())["complete"]
             analysis = next(directory.glob("hooks/*/*/diarization.json"))
             assert json.loads(analysis.read_text())["speakers"]
@@ -369,7 +370,7 @@ if installed:
         subprocess.run([binary, "transcribe", str(first), "--out", str(replay), "--no-fluid"],
                        stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60)
         assert (replay / "transcript.jsonl").stat().st_size > 0
-        print("passed: live ASR and FluidAudio across rotation, numbered WAVs, one prompt and remembered name in the next queued review")
+        print("passed: live ASR and FluidAudio across rotation, numbered M4As, one prompt and remembered name in the next queued review")
     finally:
         if child is not None and child.poll() is None:
             child.kill(); child.wait()

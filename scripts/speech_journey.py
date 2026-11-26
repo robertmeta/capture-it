@@ -56,7 +56,7 @@ pid = start_player(root, "Speech", str(fixture), binary)
 live = root / "live"
 try:
     with (root / "live-stdout.txt").open("w") as screen, (root / "live-stderr.txt").open("w") as errors:
-        child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.speech", "--out", str(live), "--duration", "25", "--hook", str(hook)], stdout=screen, stderr=errors)
+        child = subprocess.Popen([binary, "record", "--format", "wav", "--app", "com.robertmeta.capture-it.fixture.speech", "--out", str(live), "--duration", "25", "--hook", str(hook)], stdout=screen, stderr=errors)
         observed_live = False
         try:
             deadline = time.monotonic() + 45

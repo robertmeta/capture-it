@@ -35,14 +35,18 @@ enum RecordingFormat {
     }
 
     static func mono(_ input: AVAudioPCMBuffer) throws -> AVAudioPCMBuffer {
-        guard input.format.channelCount == 3 else { throw CaptureError.message("Expected app-left/app-right/microphone recording channels") }
+        guard (1...3).contains(input.format.channelCount) else { throw CaptureError.message("Expected one, two or three audio channels") }
         let planar = input.format.commonFormat == .pcmFormatFloat32 && !input.format.isInterleaved
-            ? input : try PCMConverter(output: pcmFormat(rate: input.format.sampleRate, channels: 3)).convert(input)
+            ? input : try PCMConverter(output: pcmFormat(rate: input.format.sampleRate, channels: input.format.channelCount)).convert(input)
         let format = AVAudioFormat(standardFormatWithSampleRate: input.format.sampleRate, channels: 1)!
         guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: planar.frameLength), let values = planar.floatChannelData else { throw CaptureError.message("Cannot allocate transcription downmix") }
         output.frameLength = planar.frameLength
         for index in 0 ..< Int(planar.frameLength) {
-            output.floatChannelData![0][index] = values[0][index] * 0.25 + values[1][index] * 0.25 + values[2][index] * 0.5
+            switch input.format.channelCount {
+            case 1: output.floatChannelData![0][index] = values[0][index]
+            case 2: output.floatChannelData![0][index] = (values[0][index] + values[1][index]) * 0.5
+            default: output.floatChannelData![0][index] = values[0][index] * 0.25 + values[1][index] * 0.25 + values[2][index] * 0.5
+            }
         }
         return output
     }

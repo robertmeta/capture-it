@@ -20,7 +20,7 @@ pids = []
 
 def capture(name, title=None, hook=False):
     output = root / name
-    args = [binary, "record", "--app", f"com.robertmeta.capture-it.fixture.{name.lower()}",
+    args = [binary, "record", "--format", "wav", "--app", f"com.robertmeta.capture-it.fixture.{name.lower()}",
             "--out", str(output), "--duration", "2", "--no-transcribe"]
     if title is not None:
         args += ["--title", title]

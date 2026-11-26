@@ -40,7 +40,7 @@ try:
     fcntl.fcntl(write_fd, fcntl.F_SETFL, flags)
     session = root / "session"
     with (root / "stderr.txt").open("w") as errors:
-        child = subprocess.Popen([binary, "record", "--app", "com.robertmeta.capture-it.fixture.shutdown", "--out", str(session), "--hook", str(hook)], stdout=write_fd, stderr=errors)
+        child = subprocess.Popen([binary, "record", "--format", "wav", "--app", "com.robertmeta.capture-it.fixture.shutdown", "--out", str(session), "--hook", str(hook)], stdout=write_fd, stderr=errors)
         deadline = time.monotonic() + 45
         while True:
             transcript = session / "transcript.txt"
@@ -51,7 +51,7 @@ try:
             time.sleep(0.01)
         child.send_signal(signal.SIGINT)
         deadline = time.monotonic() + 10
-        while "WAV saved. Finishing transcription" not in (root / "stderr.txt").read_text():
+        while "Audio saved. Finishing transcription" not in (root / "stderr.txt").read_text():
             assert child.poll() is None and time.monotonic() < deadline, "Did not enter speech drain"
             time.sleep(0.005)
         saved = json.loads((session / "session.json").read_text())

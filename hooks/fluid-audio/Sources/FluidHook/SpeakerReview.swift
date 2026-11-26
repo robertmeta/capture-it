@@ -79,8 +79,8 @@ enum SpeakerReview {
             let chunks: [Chunk]
         }
         let saved = try JSONDecoder().decode(SessionFiles.self, from: Data(contentsOf: session.appendingPathComponent("session.json")))
-        guard saved.chunks.count == 1, let file = saved.chunks.first?.file, file.hasSuffix(".wav"),
-              URL(fileURLWithPath: file).lastPathComponent == file else { throw HookFailure("Expected one session WAV filename") }
+        guard saved.chunks.count == 1, let file = saved.chunks.first?.file, ["wav", "m4a", "mp3", "aif", "aiff", "caf"].contains(URL(fileURLWithPath: file).pathExtension.lowercased()),
+              URL(fileURLWithPath: file).lastPathComponent == file else { throw HookFailure("Expected one session audio filename") }
         let wav = session.appendingPathComponent(file)
         if interactive {
             let terminal = try SpeakerTerminal()

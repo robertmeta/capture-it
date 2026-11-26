@@ -19,7 +19,7 @@ children = []
 
 
 def command(query, directory):
-    return [binary, "record", "--app", query, "--out", str(directory), "--duration", "2", "--no-transcribe"]
+    return [binary, "record", "--format", "wav", "--app", query, "--out", str(directory), "--duration", "2", "--no-transcribe"]
 
 
 def assert_capture(directory, pid, filename="recording.wav"):
@@ -83,7 +83,7 @@ try:
     # Both shorthand forms create a dated session under the selected capture home.
     work = root / "cwd"
     work.mkdir()
-    for args in (["Selected"], ["record", "*Selected*", "--home", str(root / "flag home")]):
+    for args in (["Selected", "--format", "wav"], ["record", "*Selected*", "--format", "wav", "--home", str(root / "flag home")]):
         capture_home = root / ("flag home" if "--home" in args else "env home")
         recordings = capture_home / "recordings"
         before = set(recordings.glob("*"))
@@ -102,7 +102,7 @@ try:
     devices = json.loads(subprocess.check_output([binary, "devices", "--json"], text=True))
     default = next(device for device in devices if device["isDefault"])
     explicit = root / "explicit-mic"
-    result = subprocess.run([binary, "Selected", "--out", str(explicit), "--mic", default["uid"], "--duration", "1", "--no-transcribe"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+    result = subprocess.run([binary, "Selected", "--format", "wav", "--out", str(explicit), "--mic", default["uid"], "--duration", "1", "--no-transcribe"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert_capture(explicit, children[0])
     saved = json.loads((explicit / "session.json").read_text())
