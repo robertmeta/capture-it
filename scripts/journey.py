@@ -17,6 +17,11 @@ def run(*args, expected=0):
 
 assert re.fullmatch(r"\d+\.\d+\.\d+", run("--version").stdout.strip())
 assert "capture-it NAME_OR_PATTERN" in run("--help").stdout
+assert "--ai-help" in run("--help").stdout
+guide = run("--ai-help").stdout
+assert "AI_GUIDANCE_VERSION=1" in guide and run("--version").stdout.strip() in guide
+assert all(token in guide for token in ["capture-it enrich", "gpt-6.2-sol", "speaker-identities.json", "CAPTURE_IT_HOOK_OUTPUT", "--no-ai", "Exit codes:", "Recovery:"])
+assert run("speakers", "--ai-help").stdout == guide
 apps = json.loads(run("apps", "--json").stdout)
 devices = json.loads(run("devices", "--json").stdout)
 assert isinstance(apps, list) and isinstance(devices, list)

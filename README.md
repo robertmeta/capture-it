@@ -29,6 +29,10 @@ export PATH="$HOME/bin:$PATH"
 capture-it doctor
 ```
 
+Use `capture-it --help` for command help. AI agents can request the dense
+operational guide with `capture-it --ai-help`, covering commands, defaults,
+file schemas, hooks, speaker review, privacy and recovery.
+
 If speech assets are missing, install the desired language explicitly:
 
 ```sh

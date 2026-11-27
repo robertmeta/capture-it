@@ -7,6 +7,7 @@ public enum CLI {
     capture-it \(captureItVersion) — app audio + microphone, M4A + live local transcript
 
     Usage:
+      capture-it --ai-help                     # dense operational guide for AI agents
       capture-it NAME_OR_PATTERN [NAME_OR_PATTERN ...] [record options]
       capture-it apps [--json]
       capture-it devices [--json]
@@ -71,6 +72,7 @@ public enum CLI {
 
     public static func run(_ arguments: [String]) async throws -> Int32 {
         guard let first = arguments.first else { print(help); return 0 }
+        if arguments.contains("--ai-help") { print(aiHelp); return 0 }
         if first == "--help" || first == "-h" || arguments.dropFirst().contains("--help") { print(help); return 0 }
         if first == "--version" { print(captureItVersion); return 0 }
         let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks", "enrich", "speakers", "people"]
