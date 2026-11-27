@@ -1,6 +1,8 @@
-.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-keys test-meetings test-m4a test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed audit-public
+.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-keys test-meetings test-m4a test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed test-ai audit-public
 
 BINDIR ?= $(HOME)/bin
+# Fixture checks never invoke a configured model provider.
+export CAPTURE_IT_AI = off
 
 help:
 	@echo 'build          Build and ad-hoc sign the release CLI'
@@ -17,6 +19,7 @@ help:
 	@echo 'test-keys       Real terminal q, repeated q, Ctrl-C, Escape and restoration'
 	@echo 'test-m4a        Import M4A/WAV, replay and label audio with local speech and FluidAudio'
 	@echo 'test-meetings   Rotate real multi-app audio while hooks run and apps relaunch'
+	@echo 'test-ai         AI suggestions, review and enrollment with real local voices'
 	@echo 'test-hooks      Real capture + local hooks, failure, timeout and cancellation'
 	@echo 'test-title      Real selected-app Accessibility title, override and hook metadata'
 	@echo 'setup-fluid     Download/build/install FluidAudio hook and offline models'
@@ -32,6 +35,7 @@ build:
 install: build
 	mkdir -p "$(BINDIR)"
 	install -m 755 .build/release/capture-it "$(BINDIR)/capture-it"
+	install -m 755 hooks/ai-enrich.py "$(BINDIR)/capture-it-ai"
 	@printf 'Installed %s\n' "$(BINDIR)/capture-it"
 
 setup: install setup-fluid
@@ -44,6 +48,7 @@ lint:
 
 test-journeys: build
 	python3 scripts/journey.py .build/release/capture-it
+	python3 scripts/ai_journey.py .build/release/capture-it
 
 test-native: build
 	python3 scripts/native_journey.py .build/release/capture-it
@@ -97,6 +102,9 @@ setup-fluid: build-fluid
 	install -m 755 hooks/fluidaudio "$(BINDIR)/capture-it-fluid"
 	"$(BINDIR)/capture-it-fluid" --check
 	@echo 'FluidAudio installed. Record with capture-it teams; labels run after saving. Use --no-fluid to skip.'
+
+test-ai: build
+	python3 scripts/ai_journey.py .build/release/capture-it --fluid
 
 test-fluid: build
 	python3 scripts/fluid_journey.py .build/release/capture-it

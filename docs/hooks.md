@@ -7,7 +7,8 @@ optional and explicit; it uses the same executable contract described below.
 Hooks let a terminal program process the saved audio, or the audio and transcript.
 Your hooks are explicit executable files. After `make setup`, the first-party
 `capture-it-fluid` installed beside the CLI is selected automatically; use
-`--no-fluid` to skip it. Arbitrary plugins and agents are never discovered.
+`--no-fluid` to skip it. The installed `capture-it-ai` follows FluidAudio by default using Codex / Sol.
+Use `--no-ai` to skip it. Arbitrary plugins and agents are never discovered.
 
 ```sh
 capture-it teams --hook ./examples/hooks/inspect-session.py
@@ -127,6 +128,12 @@ keeps exit 1. The original capture and transcript remain available for a retry.
 Hooks run as your normal user and can access your files. Use hooks you trust and
 write derived work into `CAPTURE_IT_HOOK_OUTPUT`. This is a process boundary,
 not a sandbox or a guarantee against a hook intentionally changing its inputs.
+
+## AI enrichment
+
+The installed [AI enrichment hook](ai-enrichment.md) produces validated speaker
+suggestions and notes, then foreground review can confirm and enroll a voice.
+It defaults to Codex / `gpt-6.2-sol`; `--no-ai` disables it.
 
 ## Terminal AI example
 

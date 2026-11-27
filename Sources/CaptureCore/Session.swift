@@ -307,7 +307,11 @@ public enum Sessions {
             try atomicJSON(updated, at: session.appendingPathComponent("session.json"))
         }
         var hooksComplete = false
-        do { hooksComplete = try await HookRunner.run(session: session, transcriptDirectory: directory, options: hooks, shutdown: stop.state).complete }
+        do {
+            let run = try await HookRunner.run(session: session, transcriptDirectory: directory, options: hooks, shutdown: stop.state)
+            hooksComplete = run.complete
+            try HookRunner.reviewIfInteractive(session: session, run: run.speakerRun, options: hooks, shutdown: stop.state)
+        }
         catch { issues.add("Post-session hooks failed: \(error)") }
         if imported {
             var updated = manifest

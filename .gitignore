@@ -55,6 +55,9 @@ diarization.rttm
 speaker-transcript.txt
 speaker-transcript.jsonl
 speaker-identities.json
+speaker-suggestions.jsonl
+speaker-suggestion-decisions.json
+enrichment.json
 *.voice/
 .enrollment-*/
 

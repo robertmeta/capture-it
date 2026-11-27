@@ -59,7 +59,7 @@ that day uses `-02`, including when you restart the CLI. Numbering starts at
 `01` for each local date and ordered set of app search terms.
 
 English (`en-US`) is the default. `make install` builds and signs the CLI, then
-installs it to `~/bin/capture-it`. Add `export PATH="$HOME/bin:$PATH"` to
+installs it to `~/bin/capture-it` with `capture-it-ai` beside it. Add `export PATH="$HOME/bin:$PATH"` to
 `~/.zshrc` if needed for future terminals. Choose another install directory with:
 
 ```sh
@@ -96,8 +96,10 @@ checks the screen grant for its current launch without requesting permission.
 Rebuilding or moving an ad-hoc-signed binary can require authorization again.
 Playback remains audible. ScreenCaptureKit requires a display and saves audio only.
 
-Built-in capture and transcription run locally. `setup-speech` contacts Apple
-to download assets. Optional user-selected hooks may contact their own providers.
+Built-in capture, transcription and FluidAudio run locally. The installed AI
+enrichment step defaults to **Codex / `gpt-6.2-sol`**, sending transcript text to
+Codex’s configured provider after saving. Use `--no-ai` to keep built-in processing
+local. `setup-speech` contacts Apple to download assets.
 
 ### Set up automatic speaker labels
 
@@ -124,6 +126,28 @@ Ctrl-C again skips or cancels the remaining processing. To skip automatic labels
 capture-it teams --no-fluid
 ```
 
+### AI enrichment
+
+`make install` also installs the AI hook. Install and authenticate the Codex CLI
+separately. After local speaker analysis, Codex proposes speaker names with
+quoted, timestamped evidence and writes meeting notes. No audio is attached.
+
+```sh
+capture-it teams slack                         # default Codex / Sol enrichment
+capture-it teams slack --no-ai                 # skip the AI step
+capture-it enrich ./my-call --no-review        # enrich saved text/speakers
+capture-it enrich ./my-call --run UUID/001     # select an existing analysis
+```
+
+Review plays each unmatched voice and shows available suggestions. Type
+`:accept 1` to confirm, another name to change it, `:reject` to dismiss, Enter to
+skip, or `:quit` to return later. Confirmation labels the speaker throughout the
+recording and saves voice samples. AI guesses never enroll automatically.
+`--no-review` saves the results for later. Failed AI processing preserves saved
+audio, transcripts and completed voice analysis.
+
+[Configuration, outputs and jq recipes](docs/ai-enrichment.md).
+
 ### Remember a speaker
 
 After saving a call, capture-it checks for remembered voices. In a foreground
@@ -136,7 +160,7 @@ To record raw audio now and review it later, use the session path printed when
 the recording finishes:
 
 ```sh
-capture-it teams --no-transcribe --no-fluid --out ./my-call
+capture-it teams --no-transcribe --no-fluid --no-ai --out ./my-call
 capture-it hooks ./my-call                 # run FluidAudio and review
 capture-it speakers ./my-call              # resume an existing review
 capture-it speakers ./my-call --list        # show IDs, names and example times

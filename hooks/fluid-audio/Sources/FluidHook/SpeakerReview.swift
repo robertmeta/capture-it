@@ -74,6 +74,7 @@ enum SpeakerReview {
         let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: output.appendingPathComponent("diarization.json")))
         guard report.version == 1 else { throw HookFailure("Unsupported diarization report version") }
         let examples = voiceExamples(report.turns, minimumDuration: 0.05)
+        let suggestions = try SuggestionReview.load(session: session, output: output, speakers: report.speakers)
         struct SessionFiles: Decodable {
             struct Chunk: Decodable { let file: String }
             let chunks: [Chunk]
@@ -85,7 +86,10 @@ enum SpeakerReview {
         if interactive {
             let terminal = try SpeakerTerminal()
             let matched = try identities(in: output)
-            let unknown = report.speakers.filter { matched[$0] == nil }
+            let unknown = report.speakers.filter { matched[$0] == nil }.sorted {
+                let a = suggestions[$0]?.isEmpty == false, b = suggestions[$1]?.isEmpty == false
+                return a == b ? $0 < $1 : a
+            }
             if unknown.isEmpty {
                 print(report.speakers.isEmpty ? "No speakers detected." : "All speakers already have names.")
                 return true
@@ -114,9 +118,11 @@ enum SpeakerReview {
                 }
                 print("Playing \(id)…")
                 try play(wav: wav, span: first, terminal: terminal)
-                guard !terminal.cancelled, let answer = try terminal.name(for: id), answer != ":quit" else { finished = false; break }
-                if answer.isEmpty { continue }
-                try await assign(answer, speaker: id, output: output, wav: wav, spans: spans, revision: revision, makeManager: makeManager)
+                guard !terminal.cancelled, let answer = try SuggestionReview.ask(speaker: id, proposals: suggestions[id] ?? [], output: output, terminal: terminal) else { finished = false; break }
+                if answer.name.isEmpty { continue }
+                try await assign(answer.name, speaker: id, output: output, wav: wav, spans: spans, revision: revision, makeManager: makeManager)
+                if let accepted = answer.accepted { try SuggestionReview.decide([accepted], status: "accepted", output: output) }
+                else { try SuggestionReview.decide(suggestions[id] ?? [], status: "replaced", output: output) }
             }
             print("Review finished. You can resume with capture-it speakers and this session path.")
             return finished && !terminal.cancelled
@@ -126,6 +132,7 @@ enum SpeakerReview {
             for id in report.speakers {
                 let times = (examples[id] ?? []).map { String(format: "%.2f–%.2fs", $0.lowerBound, $0.upperBound) }
                 print("\(id)\t\(labels[id]?.name ?? "(unnamed)")\t\(times.isEmpty ? "no isolated sample" : times.joined(separator: ", "))")
+                if labels[id] == nil { SuggestionReview.describe(suggestions[id] ?? []) }
             }
             if report.speakers.isEmpty { print("No speakers detected") }
             return true

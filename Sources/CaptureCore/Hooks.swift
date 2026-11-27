@@ -5,6 +5,9 @@ import Foundation
 /// Selected executables to run after audio and transcript files have finalized.
 public struct HookOptions: Sendable {
     public var executables: [URL]
+    var agent: String?
+    var aiModel: String?
+    var speakerRun: String?
     var home: URL?
     var promptForSpeakers = true
     public var timeout: Double
@@ -29,6 +32,12 @@ public struct HookOptions: Sendable {
 
 /// Setup opts into the first-party hook by installing it beside the CLI.
 enum InstalledHooks {
+    static func ai(beside executable: URL? = Bundle.main.executableURL) -> URL? {
+        guard let executable else { return nil }
+        let hook = executable.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("capture-it-ai")
+        return FileManager.default.fileExists(atPath: hook.path) ? hook : nil
+    }
+
     static func fluid(beside executable: URL? = Bundle.main.executableURL) -> URL? {
         guard let executable else { return nil }
         let hook = executable.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("capture-it-fluid")
@@ -112,7 +121,7 @@ enum HookRunner {
         if let input { try atomicJSON(input, at: inputURL) }
         struct Report: Encodable { let version = 1; let results: [HookResult] }
         var results: [HookResult] = []
-        var speakerRun: String?
+        var speakerRun: String? = options.speakerRun
         let fluid = InstalledHooks.fluid()?.resolvingSymlinksInPath()
         let hint = shutdown.requested ? "Ctrl-C cancels remaining hooks" : "capture continues"
         diagnostic("Post-session hooks → \(runDirectory.path); \(hint)")
@@ -125,7 +134,7 @@ enum HookRunner {
             } else {
                 diagnostic("Running hook \(index + 1)/\(options.executables.count): \(executable.path)")
                 let began = Date()
-                do { result = try await execute(executable: executable, input: inputURL, event: input!, output: output, timeout: options.timeout, home: options.home, shutdown: shutdown) }
+                do { result = try await execute(executable: executable, input: inputURL, event: input!, output: output, timeout: options.timeout, home: options.home, agent: options.agent, model: options.aiModel, speakerRun: speakerRun, shutdown: shutdown) }
                 catch { result.status = "failed"; result.message = String(describing: error) }
                 result.duration = Date().timeIntervalSince(began)
             }
@@ -139,12 +148,16 @@ enum HookRunner {
         return HookRun(complete: results.allSatisfy { $0.status == "complete" }, speakerRun: speakerRun)
     }
 
-    private static func execute(executable: URL, input: URL, event: HookEvent, output: URL, timeout: Double, home: URL?, shutdown: ShutdownState) async throws -> HookResult {
+    private static func execute(executable: URL, input: URL, event: HookEvent, output: URL, timeout: Double, home: URL?, agent: String?, model: String?, speakerRun: String?, shutdown: ShutdownState) async throws -> HookResult {
         let stdout = try createPrivateFile(output.appendingPathComponent("stdout.log"))
         let stderr = try createPrivateFile(output.appendingPathComponent("stderr.log"))
         defer { try? stdout.close(); try? stderr.close() }
         var environment = ProcessInfo.processInfo.environment
         if let home { environment["CAPTURE_IT_HOME"] = home.path }
+        if let agent { environment["CAPTURE_IT_AI"] = agent }
+        if let model { environment["CAPTURE_IT_AI_MODEL"] = model }
+        if let speakerRun { environment["CAPTURE_IT_SPEAKER_RUN"] = speakerRun }
+        else { environment.removeValue(forKey: "CAPTURE_IT_SPEAKER_RUN") }
         environment["CAPTURE_IT_EVENT"] = input.path
         environment["CAPTURE_IT_SESSION"] = event.sessionDirectory
         environment["CAPTURE_IT_WAV"] = event.wav
@@ -192,6 +205,35 @@ enum HookRunner {
         }
         try stdout.synchronize(); try stderr.synchronize()
         return result
+    }
+
+    /// Resolve an existing completed analysis without running speech or diarization again.
+    static func selectSpeakerRun(session: URL, run: String?) throws -> String? {
+        let root = session.standardizedFileURL.appendingPathComponent("hooks")
+        guard FileManager.default.fileExists(atPath: root.path) else {
+            if run != nil { throw CaptureError.message("No speaker analysis at the requested --run") }
+            return nil
+        }
+        struct Results: Decodable { let results: [HookResult] }
+        var choices: [String] = []
+        for parent in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            where UUID(uuidString: parent.lastPathComponent) != nil {
+            let results = parent.appendingPathComponent("result.json")
+            guard FileManager.default.fileExists(atPath: results.path) else { continue }
+            for item in try JSONDecoder().decode(Results.self, from: Data(contentsOf: results)).results where item.status == "complete" {
+                let output = URL(fileURLWithPath: item.outputDirectory).standardizedFileURL
+                guard output.deletingLastPathComponent() == parent, !output.lastPathComponent.isEmpty,
+                      output.lastPathComponent.allSatisfy(\.isNumber),
+                      FileManager.default.fileExists(atPath: output.appendingPathComponent("diarization.json").path) else { continue }
+                choices.append(parent.lastPathComponent + "/" + output.lastPathComponent)
+            }
+        }
+        if let run {
+            guard choices.contains(run) else { throw CaptureError.message("Unknown completed speaker analysis --run \(run)") }
+            return run
+        }
+        if choices.count > 1 { throw CaptureError.message("Select an analysis with --run: " + choices.sorted().joined(separator: ", ")) }
+        return choices.first
     }
 
     static var foregroundTerminal: Bool {
