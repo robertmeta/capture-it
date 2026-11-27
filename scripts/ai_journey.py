@@ -6,6 +6,7 @@ No model provider is called by this script.
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path
 import shutil
 import struct
@@ -17,6 +18,11 @@ from speaker_review_journey import terminal_command
 
 
 def main():
+    contract = runpy.run_path("hooks/ai-enrich.py")
+    assert contract["name_in_quote"]("Pat Example", "my pat.example at example.org account")
+    assert contract["name_in_quote"]("Jean Luc", "I am Jean-Luc")
+    assert not contract["name_in_quote"]("Ann", "Anna is speaking")
+    assert not contract["name_in_quote"]("Pat Example", "I am Pat")
     cli = Path(sys.argv[1]).resolve()
     fluid = "--fluid" in sys.argv[2:]
     root = Path(".build/ai-journey").resolve() / str(time.time_ns())

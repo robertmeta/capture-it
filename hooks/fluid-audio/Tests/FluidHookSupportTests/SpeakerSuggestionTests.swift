@@ -21,6 +21,13 @@ final class SpeakerSuggestionTests: XCTestCase {
         try suggestion().validate(run: run, phrases: [phrase], speakers: ["S1"])
     }
 
+    func testEmailAndHyphenSeparatorsPreserveFullNameEvidence() {
+        XCTAssertTrue(SpeakerSuggestion.name("Pat Example", occursIn: "My pat.example at example.org account"))
+        XCTAssertTrue(SpeakerSuggestion.name("Jean Luc", occursIn: "I am Jean-Luc"))
+        XCTAssertFalse(SpeakerSuggestion.name("Ann", occursIn: "Anna is speaking"))
+        XCTAssertFalse(SpeakerSuggestion.name("Pat Example", occursIn: "I am Pat"))
+    }
+
     func testStaleRunUnknownVoiceAndTerminalControlsRejected() throws {
         XCTAssertThrowsError(try suggestion { $0["name"] = "Made Up" }.validate(run: run, phrases: [phrase], speakers: ["S1"]))
         XCTAssertThrowsError(try suggestion().validate(run: "B/001", phrases: [phrase], speakers: ["S1"]))

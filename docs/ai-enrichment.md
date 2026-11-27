@@ -92,7 +92,9 @@ It writes to its own `SESSION/hooks/UUID/NNN/` output directory:
 Long transcripts are processed in chunks of up to 40,000 serialized characters
 with nearby phrase overlap. Notes are retained by part rather than making a
 second whole-meeting request. A single oversized phrase fails explicitly. Names
-must occur in exact cited quotations, and evidence must include a phrase
+must occur as complete word sequences in the cited quotations; punctuation in
+email addresses or hyphenated names is treated as a separator. The quotations
+themselves must match exactly, and evidence must include a phrase
 unambiguously attributed to the proposed voice. These checks establish evidence
 provenance; the human reviewer still decides whether the inference is correct.
 Only completed hook results with matching analysis and transcript hashes are

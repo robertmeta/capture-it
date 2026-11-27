@@ -40,11 +40,22 @@ public struct SpeakerSuggestion: Decodable {
                   original.phrase.text.contains(item.quote), item.speakers == original.speakers,
                   item.attribution == original.attribution else { throw HookFailure("Speaker suggestion evidence differs from saved transcript") }
         }
-        guard evidence.contains(where: { $0.quote.localizedCaseInsensitiveContains(name) }) else {
+        guard evidence.contains(where: { Self.name(name, occursIn: $0.quote) }) else {
             throw HookFailure("Speaker name does not occur in the cited evidence")
         }
         guard evidence.contains(where: { $0.speakers == [speaker] && $0.attribution == "single-speaker-overlap" }) else {
             throw HookFailure("Speaker suggestion lacks evidence attributed to the proposed voice")
         }
+    }
+
+    /// Match complete name words while tolerating separators in emails or hyphenation.
+    public static func name(_ name: String, occursIn quote: String) -> Bool {
+        func words(_ text: String) -> String {
+            let normalized = text.precomposedStringWithCompatibilityMapping.lowercased()
+            let separated = String(normalized.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " })
+            return separated.split(separator: " ").joined(separator: " ")
+        }
+        let key = words(name)
+        return !key.isEmpty && (" " + words(quote) + " ").contains(" " + key + " ")
     }
 }

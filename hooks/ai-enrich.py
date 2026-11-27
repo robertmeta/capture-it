@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -48,6 +49,14 @@ def name(value):
     if not value or any(ord(c) < 32 for c in value):
         fail("AI response contains an invalid person name")
     return value
+
+
+def name_in_quote(person, quote):
+    """Compare full word sequences so email/name punctuation does not hide evidence."""
+    def words(text):
+        return " ".join(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).lower()))
+    key = words(person)
+    return bool(key) and " " + key + " " in " " + words(quote) + " "
 
 
 def object_schema(properties):
@@ -169,7 +178,7 @@ def validate(response, rows, speakers, provenance, analysis_run):
         if not any(e["speakers"] == [speaker] and e["attribution"] == "single-speaker-overlap" for e in evidence):
             fail("Speaker evidence does not include an isolated attributed phrase for that speaker")
         person = name(item["name"])
-        if not any(person.casefold() in e["quote"].casefold() for e in evidence):
+        if not any(name_in_quote(person, e["quote"]) for e in evidence):
             fail("The proposed name does not appear in the cited evidence")
         suggestion = {"version": 1, "analysisRun": analysis_run, "speaker": speaker, "name": person,
                       "confidence": item["confidence"], "reason": clean(item["reason"]), "evidence": evidence, "agent": provenance}
