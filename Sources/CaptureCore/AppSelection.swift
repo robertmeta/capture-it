@@ -6,7 +6,12 @@ struct AppChoice: Equatable, Sendable {
     let name: String
     let bundleID: String
     let pid: pid_t
-    var label: String { "\(name) (\(bundleID), pid \(pid))" }
+    var runningPID: pid_t? {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { !$0.isTerminated }.map(\.processIdentifier)
+        return running.contains(pid) ? pid : (running.count == 1 ? running[0] : nil)
+    }
+    var label: String { pid > 0 ? "\(name) (\(bundleID), pid \(pid))" : "\(name) (\(bundleID), waiting for launch)" }
 }
 
 enum AppSelection {
@@ -76,7 +81,19 @@ enum AppSelection {
     }
 
     static func resolve(_ query: String) async throws -> AppChoice {
-        let applications = await running()
+        var applications = await running()
+        if try matches(query, in: applications).isEmpty {
+            let files = FileManager.default
+            let roots = files.urls(for: .applicationDirectory, in: [.localDomainMask, .userDomainMask])
+            for root in roots where files.fileExists(atPath: root.path) {
+                let installed = try files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+                for url in installed where url.pathExtension == "app" {
+                    guard let bundle = Bundle(url: url)?.bundleIdentifier,
+                          !applications.contains(where: { $0.bundleID == bundle }) else { continue }
+                    applications.append(AppChoice(name: url.deletingPathExtension().lastPathComponent, bundleID: bundle, pid: 0))
+                }
+            }
+        }
         return try choose(query, from: applications, interactive: isatty(STDIN_FILENO) == 1,
                           read: { readLine() }, write: { FileHandle.standardError.write(Data($0.utf8)) })
     }

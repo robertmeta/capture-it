@@ -10,7 +10,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "FluidHookSupport"),
-        .executableTarget(name: "FluidHook", dependencies: ["FluidHookSupport", .product(name: "FluidAudio", package: "FluidAudio")], resources: [.process("Resources")]),
+        .target(name: "CapturePaths"),
+        .executableTarget(name: "FluidHook", dependencies: ["FluidHookSupport", "CapturePaths", .product(name: "FluidAudio", package: "FluidAudio")], resources: [.process("Resources")]),
         .testTarget(name: "FluidHookSupportTests", dependencies: ["FluidHookSupport"])
     ],
     swiftLanguageModes: [.v6]

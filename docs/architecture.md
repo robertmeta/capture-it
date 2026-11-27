@@ -9,13 +9,13 @@ Apple's asset framework to download a model.
 Before recording, `--app` resolves a case-insensitive name/bundle substring or
 quoted `*`/`?` wildcard against running main applications. One match selects
 automatically; ambiguity uses a numbered stdin picker with stderr prompts.
-Embedded helpers are omitted. Selection binds one bundle ID and PID, which
-native capture revalidates and uses in its single-application filter.
+Embedded helpers are omitted. Each argument selects one app. The ScreenCaptureKit include filter follows
+these bundle IDs and the selected PIDs. Installed apps can wait for launch.
 Noninteractive ambiguity fails before output creation or capture permissions.
 See [app selection](adr/0004-select-app-by-name-or-pattern.md).
 
 The short form `capture-it teams` routes to recording. Default output is a
-sanitized search-term plus local timestamp in the current directory. Before
+sanitized app list plus local date and occurrence under the capture home’s `recordings/` directory. Before
 opening capture, explicit `--mic` wins; otherwise a single exposed active
 input from the app's audio processes is preferred, with system-default fallback.
 Input device scope and active-input status come from public Core Audio properties.
@@ -31,7 +31,7 @@ flowchart LR
     AQ --> C[Timestamp assembly worker]
     MQ --> C
     C --> WQ[Bounded WAV queue]
-    WQ --> W[One recording.wav: L / R / mic]
+    WQ --> W[Recovery WAV per meeting: L / R / mic]
     C --> RQ[Bounded speech queue]
     RQ --> R[Explicit mono downmix + one analyzer]
     R --> T[Bounded transcript mailbox]
@@ -64,9 +64,8 @@ The analyzer input has a 128-buffer limit. Transcript and stdout queues each
 hold at most 512 segments; transcript text is not retained in an unbounded
 in-memory array.
 
-The single PCM16 WAV uses WAVE_FORMAT_EXTENSIBLE with discrete channels,
-periodic header checkpoints and an explicit RIFF size guard. No rollover
-occurs. The manifest declares app-left/app-right/microphone order and input
+The capture worker writes a PCM16 recovery WAV using WAVE_FORMAT_EXTENSIBLE with discrete channels,
+periodic header checkpoints and an explicit RIFF size guard. At four hours the assembler routes the next complete packet to a fresh meeting. The manifest declares app-left/app-right/microphone order and input
 sample counts. Different player downmix rules do not affect the explicit
 recognition downmix. v0.1 separate-file replay is rejected without changing
 old files.
@@ -83,6 +82,13 @@ The recording lifecycle is starting → recording → stopping → complete/fail
 Transcription has independent disabled/unavailable/running/complete/incomplete/interrupted
 states. Every failure is attached to the session. Model, queue and transcript
 failures do not invalidate successfully saved audio.
+
+Saved meetings default to ALAC M4A. A bounded native AVAudioFile conversion
+validates channel count, rate and frames before publishing the M4A path in the
+manifest and removing the recovery WAV. `--format wav` keeps the WAV.
+Standalone audio input becomes a session, copying M4A bytes or encoding decoded
+PCM for other formats. Speech and FluidAudio accept mono, stereo and capture
+three-channel mixes.
 
 Shutdown stops native producers first, drains input queues through the assembler,
 and closes the WAV writer. Audio completion is persisted before waiting for speech.
@@ -103,13 +109,22 @@ that the latest file or native resource has finalized; persistent files expose
 the last checkpoint rather than claiming success.
 
 Explicit `--hook` executables run after audio closure and the transcription
-attempt. A versioned JSON handoff includes absolute WAV and optional text paths.
+attempt. Optional `make setup` installs FluidAudio beside the CLI and enables
+automatic first-party labeling in that same hook path; `--no-fluid` skips it.
+A versioned JSON handoff includes absolute WAV and optional text paths.
 Each hook has a private output/log directory, process group and timeout. Hook
 stdout never participates in the transcript tee; failures preserve capture and
 continue the chain, while interruption cancels the group and skips remaining
 hooks. The standalone `hooks` command can retry on saved artifacts. See
 [hook contract](hooks.md) and [decision](adr/0007-explicit-post-session-hooks.md).
 Provider-specific behavior and speaker enrichment stay outside the core.
+See [installed FluidAudio selection](adr/0010-installed-fluid-hook.md).
+
+A foreground terminal observer reads `n` and `q` without Enter on a separate nonblocking
+control queue. The new meeting key rotates the output lane on the same capture stream.
+The quit key requests the idempotent drain state, while signal handlers
+retain escalation. Terminal settings restore synchronously before the CLI exits;
+piped stdin stays untouched. See [graceful quit key](adr/0011-graceful-quit-key.md).
 
 A separate serial Accessibility worker reads only the selected PID's window
 titles, bounded to eight windows and 150 ms per message. It updates an optional
@@ -122,3 +137,7 @@ The snapshot travels in session/hook metadata. See
 Decisions: [Use independent bounded workers](adr/0001-native-concurrent-cli.md),
 [use ScreenCaptureKit for native capture](adr/0002-screencapturekit-capture.md),
 and [store one multichannel WAV](adr/0003-single-multichannel-wav.md).
+
+[Meeting rotation, output names and app reconnection](adr/0014-continuous-meeting-capture.md).
+
+[M4A storage and audio-file inputs](adr/0015-m4a-recordings-and-audio-input.md).

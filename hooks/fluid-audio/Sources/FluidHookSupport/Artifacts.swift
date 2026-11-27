@@ -34,6 +34,18 @@ public struct SpeakerTurn: Codable, Sendable, Equatable {
     public init(start: Double, end: Double, speaker: String) {
         self.start = start; self.end = end; self.speaker = speaker
     }
+
+    /// Intersect padded model windows with the source audio before exporting turns.
+    /// A turn entirely in model padding has no source samples and is omitted.
+    public func clipped(to duration: Double) throws -> SpeakerTurn? {
+        guard duration.isFinite, duration >= 0, start.isFinite, end.isFinite, end >= start else {
+            throw HookFailure("Diarizer returned an invalid time range: start=\(start), end=\(end), sourceDuration=\(duration)")
+        }
+        let first = max(0, start)
+        let last = min(end, duration)
+        guard last > first else { return nil }
+        return SpeakerTurn(start: first, end: last, speaker: speaker)
+    }
 }
 
 /// Original phrase data; timing and text are retained without guessing word boundaries.
@@ -48,7 +60,7 @@ public struct TranscriptPhrase: Codable, Sendable {
 }
 
 /// A derived label plus the untouched source phrase and overlap evidence.
-public struct AttributedPhrase: Encodable {
+public struct AttributedPhrase: Codable {
     public let phrase: TranscriptPhrase
     public let speakers: [String]
     public let attribution: String
@@ -82,10 +94,11 @@ public enum PhraseAttribution {
     }
 
     /// Build a derived text copy. Input transcript files are never modified.
-    public static func line(_ value: AttributedPhrase) -> String {
+    public static func line(_ value: AttributedPhrase, names: [String: String] = [:]) -> String {
         let stamp = timestamp(value.phrase.start)
-        let label = value.attribution == "single-speaker-overlap" ? value.speakers[0]
-            : (value.attribution == "mixed" ? "mixed: " + value.speakers.joined(separator: ", ") : "unknown")
+        let speakers = value.speakers.map { names[$0] ?? $0 }
+        let label = value.attribution == "single-speaker-overlap" ? speakers.first ?? "unknown"
+            : (value.attribution == "mixed" ? "mixed: " + speakers.joined(separator: ", ") : "unknown")
         return "[\(stamp)] [\(label)] \(value.phrase.text.replacingOccurrences(of: "\n", with: " "))\n"
     }
 
@@ -96,25 +109,37 @@ public enum PhraseAttribution {
 
 /// Prepare the same .25 L + .25 R + .5 mic mix at 16 kHz using bounded buffers.
 public enum AnalysisAudio {
-    @discardableResult public static func prepare(wav: URL, destination: URL) throws -> Double {
+    @discardableResult public static func prepare(wav: URL, destination: URL, interval: Range<Double>? = nil) throws -> Double {
         let file = try AVAudioFile(forReading: wav, commonFormat: .pcmFormatFloat32, interleaved: false)
-        guard file.processingFormat.channelCount == 3, file.processingFormat.sampleRate == 48_000 else {
-            throw HookFailure("FluidAudio hook expects capture-it's three-channel 48 kHz WAV")
+        guard (1...3).contains(file.processingFormat.channelCount) else {
+            throw HookFailure("FluidAudio hook expects one, two or three audio channels")
         }
-        let mono = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let rate = file.processingFormat.sampleRate
+        let duration = Double(file.length) / rate
+        let span = interval ?? 0..<duration
+        guard span.lowerBound >= 0, span.upperBound <= duration else { throw HookFailure("Speaker interval exceeds source audio") }
+        file.framePosition = AVAudioFramePosition(ceil(span.lowerBound * rate))
+        let endFrame = interval == nil ? file.length : min(file.length, AVAudioFramePosition(floor(span.upperBound * rate)))
+        let mono = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
         let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
         guard let converter = AVAudioConverter(from: mono, to: outputFormat) else { throw HookFailure("Cannot create audio resampler") }
         converter.primeMethod = .none
         let output = try AVAudioFile(forWriting: destination, settings: outputFormat.settings)
         let incoming = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8190)!
         let mixed = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: 8190)!
-        let converted = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 3000)!
-        while file.framePosition < file.length {
-            try file.read(into: incoming)
+        let converted = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(ceil(8190 * 16_000 / rate)) + 256)!
+        while file.framePosition < endFrame {
+            let frames = AVAudioFrameCount(min(Int64(incoming.frameCapacity), endFrame - file.framePosition))
+            try file.read(into: incoming, frameCount: frames)
+            guard incoming.frameLength > 0 else { throw HookFailure("Unexpected end of source audio") }
             mixed.frameLength = incoming.frameLength
             let channels = incoming.floatChannelData!
             for index in 0 ..< Int(incoming.frameLength) {
-                mixed.floatChannelData![0][index] = 0.25 * channels[0][index] + 0.25 * channels[1][index] + 0.5 * channels[2][index]
+                switch file.processingFormat.channelCount {
+                case 1: mixed.floatChannelData![0][index] = channels[0][index]
+                case 2: mixed.floatChannelData![0][index] = 0.5 * channels[0][index] + 0.5 * channels[1][index]
+                default: mixed.floatChannelData![0][index] = 0.25 * channels[0][index] + 0.25 * channels[1][index] + 0.5 * channels[2][index]
+                }
             }
             var supplied = false
             var error: NSError?
@@ -133,7 +158,7 @@ public enum AnalysisAudio {
             if converted.frameLength > 0 { try output.write(from: converted) }
             if result == .endOfStream || converted.frameLength == 0 { break }
         }
-        return Double(file.length) / file.processingFormat.sampleRate
+        return span.upperBound - span.lowerBound
     }
 }
 

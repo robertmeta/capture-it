@@ -67,7 +67,7 @@ pid = start_player(root, "Hooks", "440", binary)
 child = None
 try:
     session = root / "audio session"
-    result = run("record", "--app", "com.robertmeta.capture-it.fixture.hooks", "--out", session,
+    result = run("record", "--format", "wav", "--app", "com.robertmeta.capture-it.fixture.hooks", "--out", session,
                  "--duration", "2", "--no-transcribe", "--hook", good)
     assert result.stdout == "", result.stdout
     persisted = json.loads((session / "session.json").read_text())
@@ -83,7 +83,7 @@ try:
     print("passed: actual recording finalizes before audio-only hook; literal paths, private outputs and isolated stdout/stderr", flush=True)
 
     partial = root / "capture with failing hook"
-    run("record", "--app", "com.robertmeta.capture-it.fixture.hooks", "--out", partial,
+    run("record", "--format", "wav", "--app", "com.robertmeta.capture-it.fixture.hooks", "--out", partial,
         "--duration", "2", "--no-transcribe", "--hook", bad, "--hook", good, expected=2)
     saved = json.loads((partial / "session.json").read_text())
     assert saved["recording"] == "complete" and saved["chunks"][0]["closed"]

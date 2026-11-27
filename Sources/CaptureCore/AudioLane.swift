@@ -18,9 +18,9 @@ final class AudioLane: @unchecked Sendable {
     private let issues: Issues
     private let epoch: Double
 
-    init(source: Source, directory: URL, epoch: Double, issues: Issues) {
+    init(source: Source, directory: URL, epoch: Double, issues: Issues, file: String = "recording.wav") {
         self.source = source; self.epoch = epoch; self.issues = issues
-        writer = WAVWriter(directory: directory, source: source)
+        writer = WAVWriter(directory: directory, source: source, file: file)
     }
 
     var chunks: [Chunk] { lock.lock(); defer { lock.unlock() }; return savedChunks }

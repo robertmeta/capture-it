@@ -48,11 +48,18 @@ transcript.json
 
 # Entire default sessions and hook runs, including arbitrary derived artifacts.
 /*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]*/
+*-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*/
 **/hooks/????????-????-????-????-????????????/
 diarization.json
 diarization.rttm
 speaker-transcript.txt
 speaker-transcript.jsonl
+speaker-identities.json
+speaker-suggestions.jsonl
+speaker-suggestion-decisions.json
+enrichment.json
+*.voice/
+.enrollment-*/
 
 # Local signing keys and credentials.
 *.pem

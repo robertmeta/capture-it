@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import AudioToolbox
 import CoreAudio
@@ -11,33 +12,33 @@ import Synchronization
 /// immutable buffers. ScreenCaptureKit follows the selected app's audio helpers.
 final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let lane: CaptureInput
-    private let bundle: String
+    private let targets: [AppChoice]
     private let micLane: CaptureInput
     private let microphone: InputDevice
     private var stream: SCStream?
-    private var pid: pid_t = 0
-    private let selectedPID: pid_t?
+    private var included: Set<pid_t> = []
+    private let streamFailure = Mutex<String?>(nil)
 
-    init(bundle: String, microphone: InputDevice, lane: CaptureInput, micLane: CaptureInput, processID: pid_t? = nil) throws {
-        self.bundle = bundle; self.lane = lane; self.micLane = micLane; self.microphone = microphone
-        selectedPID = processID
-        _ = try Hardware.resolveApp(bundle, processID: processID)
+    init(targets: [AppChoice], microphone: InputDevice, lane: CaptureInput, micLane: CaptureInput) {
+        self.targets = targets; self.lane = lane; self.micLane = micLane; self.microphone = microphone
+    }
+
+    private func runningPIDs() -> Set<pid_t> {
+        Set(targets.compactMap(\.runningPID))
     }
 
     func prepare() async throws -> SCContentFilter {
         let content: SCShareableContent
         do { content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) }
         catch { throw ScreenCaptureAccess.explain(error) }
-        let matches = content.applications.filter { $0.bundleIdentifier == bundle && (selectedPID == nil || $0.processID == selectedPID) }
-        guard matches.count == 1, let app = matches.first else {
-            throw CaptureError.message("ScreenCaptureKit requires one running app matching \(bundle). Open its window and start playback.")
-        }
-        guard let display = content.displays.first else {
-            throw CaptureError.message("No display is available for the application's audio filter")
-        }
-        pid = app.processID
-        diagnostic("Selected capture app: \(app.bundleIdentifier), pid \(app.processID)")
-        return SCContentFilter(display: display, including: [app], exceptingWindows: [])
+        let selected = runningPIDs()
+        let bundles = Set(targets.map(\.bundleID))
+        let matches = content.applications.filter { selected.contains($0.processID) && bundles.contains($0.bundleIdentifier) }
+        guard let display = content.displays.first else { throw CaptureError.message("No display is available for application audio capture") }
+        included = Set(matches.map(\.processID))
+        diagnostic("Selected app audio: " + (matches.isEmpty ? "waiting for selected apps; microphone continues" :
+            matches.map { "\($0.bundleIdentifier) (pid \($0.processID))" }.joined(separator: ", ")))
+        return SCContentFilter(display: display, including: matches, exceptingWindows: [])
     }
 
     func start(filter: SCContentFilter) async throws {
@@ -84,11 +85,15 @@ final class NativeCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        lane.copyFailure.store(true, ordering: .releasing)
+        streamFailure.withLock { $0 = "ScreenCaptureKit stream stopped: \(error as NSError)" }
     }
 
-    func refresh() throws {
-        guard pid > 0, kill(pid, 0) == 0 else { throw CaptureError.message("Selected application exited") }
+    func refresh() async throws {
+        if let reason = streamFailure.withLock({ $0 }) { throw CaptureError.message(reason) }
+        if runningPIDs() != included, let stream {
+            let filter = try await prepare()
+            try await stream.updateContentFilter(filter)
+        }
         guard try Hardware.devices().contains(where: { $0.uid == microphone.uid }) else { throw CaptureError.message("Selected microphone disconnected") }
     }
 

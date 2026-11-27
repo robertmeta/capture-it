@@ -1,52 +1,86 @@
+import CapturePaths
 import AVFoundation
 import Foundation
 
 public enum CLI {
     public static let help = """
-    capture-it \(captureItVersion) — app audio + microphone, WAV + live local transcript
+    capture-it \(captureItVersion) — app audio + microphone, M4A + live local transcript
 
     Usage:
-      capture-it NAME_OR_PATTERN [record options]
+      capture-it --ai-help                     # dense operational guide for AI agents
+      capture-it NAME_OR_PATTERN [NAME_OR_PATTERN ...] [record options]
       capture-it apps [--json]
       capture-it devices [--json]
       capture-it doctor [--locale en-US] [--json]
       capture-it setup-speech [--locale en-US]   # explicit Apple model download
       capture-it setup-accessibility           # request window-title permission
-      capture-it record [NAME_OR_PATTERN | --app NAME_OR_PATTERN] [options]
-      capture-it transcribe SESSION_DIRECTORY [--out DIRECTORY] [--locale en-US]
-      capture-it hooks SESSION_DIRECTORY --hook EXECUTABLE [--hook EXECUTABLE ...]
+      capture-it record [NAME_OR_PATTERN ... | --app NAME_OR_PATTERN] [options]
+      capture-it transcribe SESSION_DIRECTORY_OR_AUDIO_FILE [--out DIRECTORY] [--locale en-US]
+      capture-it hooks SESSION_DIRECTORY [--hook EXECUTABLE ...]
+      capture-it enrich SESSION_DIRECTORY [--ai codex|claude|agy] [--run UUID/NNN]
+
+      capture-it people                         # remembered names and sample counts
+      capture-it speakers SESSION_DIRECTORY [--list] [--run UUID/NNN]
+      capture-it speakers SESSION_DIRECTORY --match [--run UUID/NNN]
+      capture-it speakers SESSION_DIRECTORY --listen SPEAKER_ID
+      capture-it speakers SESSION_DIRECTORY --assign SPEAKER_ID --name "Joe Smith"
+
+    Naming a speaker saves local voice samples for recognition in future recordings.
+    After record or hooks, a foreground terminal plays unmatched voices for naming.
+    Enter skips, :quit finishes, and speakers SESSION resumes. --list prints the IDs.
+    Use --home with record, transcribe, hooks, speakers or people.
 
     Record options:
       --app NAME_OR_PATTERN  Name/bundle substring or quoted * / ? wildcard
                              One match auto-selects; multiple matches prompt
-      --out DIRECTORY        Default: ./SEARCH-yyyyMMdd-HHmmss (new session folder)
+      --home DIRECTORY       Default: ~/Documents/capture-it (or CAPTURE_IT_HOME)
+      --out DIRECTORY        Exact session folder; default: HOME/recordings/APPS-YYYY-MM-DD-01
+      --format m4a|wav       Saved audio format; default: lossless M4A
+      --no-review            Skip the interactive speaker prompts after analysis
       --mic DEVICE_UID       Override app input detection / system-default fallback
       --locale LOCALE        Default: en-US
-      --duration SECONDS     Stop automatically; otherwise Ctrl-C stops and saves
+      --duration SECONDS     Stop automatically; otherwise q or Ctrl-C stops and saves
       --no-transcribe        Record audio without speech recognition
+      --no-fluid             Skip automatic FluidAudio speaker labeling
+      --ai AGENT             AI enrichment CLI; default: codex (CAPTURE_IT_AI=off disables)
+      --ai-model MODEL       Default for Codex: gpt-6.2-sol
+      --no-ai                Skip AI enrichment and keep processing local
       --hook EXECUTABLE      Run after saved files finalize (repeatable; no shell)
-      --hook-timeout SECONDS Per-hook time limit; default: 300
+      --hook-timeout SECONDS Per-hook limit; default: 900 with installed FluidAudio, else 300
       --title TITLE          Explicit meeting title; otherwise best-effort AX title
 
     Hook options also apply to transcribe and hooks. `hooks --transcript DIRECTORY`
     selects a saved transcript directory; otherwise use the session's transcript.
 
     Final transcript lines are teed to stdout and DIRECTORY/transcript.txt.
-    DIRECTORY/recording.wav has three channels: app left, app right, microphone.
+    The saved M4A shares the numbered meeting's name. Its channels are selected apps L/R and microphone.
+    Capture checkpoints a recovery WAV, then saves lossless M4A when the meeting ends.
+    Transcribe also accepts M4A/WAV/MP3/AIFF/CAF files with one, two or three channels.
     One mono downmix feeds a single live transcription stream.
-    WAV, transcript file and stdout workers run independently with bounded queues.
+    Audio, transcript file and stdout workers run independently with bounded queues.
     Status and errors go to stderr. Capture/speech never upload audio.
-    Explicit hooks run your code and may use remote agents; none run by default.
+    After make setup, the installed FluidAudio hook runs locally after saving.
+    First Ctrl-C saves audio, finishes speech, then labels; Ctrl-C again skips/cancels.
+    In a terminal, n starts a new meeting recording; q saves and quits. Neither key needs Enter.
+    Repeated q never cancels finishing work. Escape has no stop action.
+    FluidAudio runs before explicit hooks unless you place it explicitly yourself.
+    Installed AI enrichment sends transcript text to the selected CLI provider.
+    Default: Codex / gpt-6.2-sol. --no-ai keeps built-in processing local.
+    CAPTURE_IT_AGENT_BIN overrides the AI executable. No audio is attached.
+    Explicit hooks run your code and may use remote agents.
     Exit: 0 complete, 1 recording/usage failure, 2 saved audio/partial transcript or output.
     """
 
     public static func run(_ arguments: [String]) async throws -> Int32 {
         guard let first = arguments.first else { print(help); return 0 }
+        if arguments.contains("--ai-help") { print(aiHelp); return 0 }
         if first == "--help" || first == "-h" || arguments.dropFirst().contains("--help") { print(help); return 0 }
         if first == "--version" { print(captureItVersion); return 0 }
-        let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks"]
+        let commands: Set<String> = ["apps", "devices", "doctor", "setup-speech", "setup-accessibility", "record", "transcribe", "hooks", "enrich", "speakers", "people"]
         let command = commands.contains(first) ? first : "record"
         let args = try Arguments(commands.contains(first) ? Array(arguments.dropFirst()) : arguments)
+        if args.values["--home"] == "" { throw CaptureError.message("--home needs a directory") }
+        let home = args.values["--home"].map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
         switch command {
         case "setup-accessibility":
             try args.validate(allowed: [])
@@ -79,10 +113,17 @@ public enum CLI {
                     let available: Bool; let locale: String; let assets: String; let ready: Bool
                     let accessibilityTrusted: Bool
                     let screenRecordingGranted: Bool
+                    let fluidHook: String?
+                    let aiHook: String?
+                    let aiAgent: String
+                    let aiModel: String
                 }
                 try json(Report(available: speech.available, locale: speech.locale, assets: speech.assets,
                                 ready: speech.ready, accessibilityTrusted: MeetingObserver.isTrusted,
-                                screenRecordingGranted: screenRecordingGranted))
+                                screenRecordingGranted: screenRecordingGranted,
+                                fluidHook: InstalledHooks.fluid()?.path, aiHook: InstalledHooks.ai()?.path,
+                                aiAgent: ProcessInfo.processInfo.environment["CAPTURE_IT_AI"] ?? "codex",
+                                aiModel: ProcessInfo.processInfo.environment["CAPTURE_IT_AI_MODEL"] ?? "gpt-6.2-sol"))
             }
             else {
                 print("macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
@@ -91,31 +132,102 @@ public enum CLI {
                 print("On-device speech: \(speech.ready ? "ready" : speech.assets) (\(speech.locale))")
                 print("Automatic model downloads: disabled; run setup-speech to explicitly install assets")
                 print("Accessibility for window titles: \(MeetingObserver.isTrusted ? "ready" : "not granted; run setup-accessibility or use --title")")
+                print("AI enrichment: \(InstalledHooks.ai().map { _ in "installed; defaults to Codex / gpt-6.2-sol (--no-ai to skip)" } ?? "not installed; run make install")")
+                print("FluidAudio: \(InstalledHooks.fluid().map { "installed at \($0.path); runs after saving (--no-fluid to skip)" } ?? "not installed; run make setup")")
             }
+        case "people", "speakers":
+            let helperArguments: [String]
+            if command == "people" {
+                try args.validate(allowed: ["--home"])
+                helperArguments = ["--people"]
+            } else {
+                try args.validate(allowed: ["--home", "--run", "--list", "--match", "--listen", "--assign", "--name"], positionals: 1...1)
+                let assign = args.values["--assign"]
+                let listen = args.values["--listen"]
+                let matching = args.flags.contains("--match")
+                guard (assign == nil) == (args.values["--name"] == nil), assign == nil || listen == nil,
+                      assign != "", listen != "", !(args.flags.contains("--list") && (assign != nil || listen != nil || matching)),
+                      !(matching && (assign != nil || listen != nil)) else {
+                    throw CaptureError.message("Use --list, --match, --listen ID or --assign ID --name NAME separately")
+                }
+                if assign == nil, listen == nil, !args.flags.contains("--list"), !matching, HookRunner.foregroundTerminal {
+                    // Keep the parent alive when Ctrl-C ends the foreground dialogue.
+                    let stop = StopSignal()
+                    defer { withExtendedLifetime(stop) {} }
+                    try HookRunner.review(session: URL(fileURLWithPath: args.positionals[0]), run: args.values["--run"] ?? "", home: home)
+                    return 0
+                }
+                if matching { helperArguments = ["--match", args.positionals[0], args.values["--run"] ?? ""] }
+                else {
+                    helperArguments = ["--speakers", args.positionals[0], args.values["--run"] ?? "",
+                                       assign ?? listen ?? ""] + (args.values["--name"].map { [$0] } ?? [])
+                }
+            }
+            guard let helper = InstalledHooks.fluid() else {
+                throw CaptureError.message("Speaker review needs the installed capture-it-fluid helper. Run make setup.")
+            }
+            let process = Process()
+            process.executableURL = helper
+            process.arguments = helperArguments
+            if let home {
+                var environment = ProcessInfo.processInfo.environment
+                environment["CAPTURE_IT_HOME"] = home.path
+                process.environment = environment
+            }
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
         case "record":
-            try args.validate(allowed: ["--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--hook", "--hook-timeout", "--title"], positionals: 0...1)
-            let hooks = try args.hookOptions()
+            try args.validate(allowed: ["--format", "--home", "--no-review", "--app", "--out", "--mic", "--locale", "--duration", "--no-transcribe", "--no-fluid", "--ai", "--ai-model", "--no-ai", "--hook", "--hook-timeout", "--title"], positionals: 0...Int.max)
+            let hooks = try args.hookOptions(home: home)
+            guard let container = RecordingContainer(rawValue: args.values["--format"] ?? "m4a") else {
+                throw CaptureError.message("--format must be m4a or wav")
+            }
             if let title = args.values["--title"], MeetingTitlePolicy.clean(title).isEmpty { throw CaptureError.message("--title must not be empty") }
             guard args.values["--app"] == nil || args.positionals.isEmpty else { throw CaptureError.message("Use either a positional app name or --app, not both") }
-            guard let app = args.values["--app"] ?? args.positionals.first else { throw CaptureError.message("Choose an app: capture-it teams, or capture-it record --app NAME") }
+            let queries = args.values["--app"].map { [$0] } ?? args.positionals
+            guard !queries.isEmpty else { throw CaptureError.message("Choose an app: capture-it teams, or capture-it record --app NAME") }
             var duration: Double?
             if let raw = args.values["--duration"] {
                 guard let value = Double(raw), value.isFinite, value > 0 else { throw CaptureError.message("--duration must be a positive finite number") }
                 duration = value
             }
-            let selected = try await AppSelection.resolve(app)
-            let output = args.values["--out"].map { URL(fileURLWithPath: $0) } ?? CaptureDefaults.output(query: app, appName: selected.name)
-            return try await Sessions.record(RecordOptions(app: selected.bundleID, output: output, microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US", transcribe: !args.flags.contains("--no-transcribe"), duration: duration, processID: selected.pid, hooks: hooks, title: args.values["--title"]))
+            var targets: [AppChoice] = []
+            var stems: [String] = []
+            for query in queries {
+                let target = try await AppSelection.resolve(query)
+                if !targets.contains(where: { $0.bundleID == target.bundleID }) {
+                    targets.append(target)
+                    stems.append(CaptureDefaults.stem(query, fallback: target.name))
+                }
+            }
+            let exact = args.values["--out"].map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+            var options = RecordOptions(app: targets[0].bundleID, output: exact ?? CaptureHome(override: home).recordings,
+                                        microphone: args.values["--mic"], locale: args.values["--locale"] ?? "en-US",
+                                        transcribe: !args.flags.contains("--no-transcribe"), duration: duration,
+                                        processID: targets[0].pid, hooks: hooks, title: args.values["--title"])
+            options.container = container
+            options.targets = targets
+            options.meetingStem = stems.joined(separator: "-")
+            options.numberFirstMeeting = exact == nil
+            return try await Sessions.record(options)
         case "transcribe":
-            try args.validate(allowed: ["--out", "--locale", "--hook", "--hook-timeout"], positionals: 1...1)
-            let hooks = try args.hookOptions()
+            try args.validate(allowed: ["--home", "--out", "--locale", "--no-review", "--no-fluid", "--ai", "--ai-model", "--no-ai", "--hook", "--hook-timeout"], positionals: 1...1)
+            let hooks = try args.hookOptions(home: home)
             return try await Sessions.transcribe(session: URL(fileURLWithPath: args.positionals[0]), output: args.values["--out"].map { URL(fileURLWithPath: $0) }, locale: args.values["--locale"] ?? "en-US", hooks: hooks)
-        case "hooks":
-            try args.validate(allowed: ["--hook", "--hook-timeout", "--transcript"], positionals: 1...1)
-            let hooks = try args.hookOptions(required: true)
+        case "hooks", "enrich":
+            try args.validate(allowed: ["--home", "--no-review", "--ai", "--ai-model", "--no-ai", "--hook", "--hook-timeout", "--transcript", "--no-fluid", "--run"], positionals: 1...1)
+            var hooks = try args.hookOptions(home: home, required: true, enrich: command == "enrich")
+            if command == "enrich" {
+                guard args.values["--transcript"] == nil else { throw CaptureError.message("Use hooks --transcript to analyze a replacement transcript before enrichment") }
+                hooks.speakerRun = try HookRunner.selectSpeakerRun(session: URL(fileURLWithPath: args.positionals[0]), run: args.values["--run"])
+            } else if args.values["--run"] != nil { throw CaptureError.message("--run is for enrich or speakers") }
             let stop = StopSignal()
             stop.state.beginDraining()
-            return try await HookRunner.run(session: URL(fileURLWithPath: args.positionals[0]), transcriptDirectory: args.values["--transcript"].map { URL(fileURLWithPath: $0) }, options: hooks, shutdown: stop.state) ? 0 : 2
+            let session = URL(fileURLWithPath: args.positionals[0])
+            let run = try await HookRunner.run(session: session, transcriptDirectory: args.values["--transcript"].map { URL(fileURLWithPath: $0) }, options: hooks, shutdown: stop.state)
+            try HookRunner.reviewIfInteractive(session: session, run: run.speakerRun, options: hooks, shutdown: stop.state)
+            return run.complete ? 0 : 2
         default: throw CaptureError.message("Unknown command \(command). Run capture-it --help.")
         }
         return 0
@@ -143,7 +255,7 @@ private struct Arguments {
                     hooks.append(arguments[index]); index += 1; continue
                 }
                 guard values[value] == nil, !flags.contains(value) else { throw CaptureError.message("Repeated option \(value)") }
-                if value == "--json" || value == "--no-transcribe" { flags.insert(value) }
+                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" || value == "--list" || value == "--match" || value == "--no-review" || value == "--no-ai" { flags.insert(value) }
                 else {
                     index += 1
                     guard index < arguments.count, !arguments[index].hasPrefix("--") else { throw CaptureError.message("Missing value for \(value)") }
@@ -159,13 +271,38 @@ private struct Arguments {
         guard count.contains(positionals.count) else { throw CaptureError.message("Expected \(count) positional argument(s). Run capture-it --help.") }
     }
 
-    func hookOptions(required: Bool = false) throws -> HookOptions {
-        if required || values["--hook-timeout"] != nil {
-            guard !hooks.isEmpty else { throw CaptureError.message("Supply at least one --hook EXECUTABLE") }
+    func hookOptions(home: URL?, required: Bool = false, enrich: Bool = false) throws -> HookOptions {
+        var executables = hooks.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        let fluid = flags.contains("--no-fluid") || enrich ? nil : InstalledHooks.fluid()
+        if let fluid, !executables.contains(where: { $0.resolvingSymlinksInPath() == fluid.resolvingSymlinksInPath() }) {
+            executables.insert(fluid, at: 0)
         }
-        let raw = values["--hook-timeout"] ?? "300"
+        let environment = ProcessInfo.processInfo.environment
+        guard !(flags.contains("--no-ai") && (values["--ai"] != nil || values["--ai-model"] != nil)) else {
+            throw CaptureError.message("Use --ai or --no-ai, not both")
+        }
+        let agent = flags.contains("--no-ai") ? "off" : values["--ai"] ?? environment["CAPTURE_IT_AI"] ?? "codex"
+        guard ["off", "codex", "claude", "agy"].contains(agent) else { throw CaptureError.message("--ai must be codex, claude, agy or off") }
+        let ai = agent == "off" ? nil : InstalledHooks.ai()
+        if enrich && agent == "off" { throw CaptureError.message("enrich requires an enabled AI. Use --ai codex, claude or agy") }
+        if agent != "off", (enrich || values["--ai"] != nil || values["--ai-model"] != nil), ai == nil {
+            throw CaptureError.message("AI enrichment needs the installed capture-it-ai helper. Run make install; use --no-ai to skip.")
+        }
+        if let ai, !executables.contains(ai) {
+            let position = fluid.flatMap { target in executables.firstIndex { $0.resolvingSymlinksInPath() == target.resolvingSymlinksInPath() } }.map { $0 + 1 } ?? 0
+            executables.insert(ai, at: position)
+        }
+        if required || values["--hook-timeout"] != nil {
+            guard !executables.isEmpty else { throw CaptureError.message("Install FluidAudio with make setup, or supply --hook EXECUTABLE") }
+        }
+        let raw = values["--hook-timeout"] ?? (fluid == nil ? "300" : "900")
         guard let timeout = Double(raw) else { throw CaptureError.message("--hook-timeout must be a positive finite number") }
-        let options = HookOptions(executables: hooks.map { URL(fileURLWithPath: $0).standardizedFileURL }, timeout: timeout)
+        var options = HookOptions(executables: executables, timeout: timeout)
+        options.home = home
+        options.agent = ai == nil ? nil : agent
+        options.aiModel = values["--ai-model"] ?? environment["CAPTURE_IT_AI_MODEL"] ?? (agent == "codex" ? "gpt-6.2-sol" : nil)
+        if options.aiModel == "" { throw CaptureError.message("--ai-model must not be empty") }
+        options.promptForSpeakers = !flags.contains("--no-review")
         try options.validate()
         return options
     }

@@ -21,7 +21,7 @@ def git(*args):
 def forbidden(name):
     path = Path(name)
     private_dirs = {".agents", ".git", ".jj", ".build", ".swiftpm", ".codanna", ".serena", ".claude", ".codex", ".venv", "__pycache__"}
-    private_files = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "PRAXIS.md", "CONTEXT.md", "session.json", "transcript.txt", "transcript.json", "transcript.jsonl", "diarization.json", "diarization.rttm", "speaker-transcript.txt", "speaker-transcript.jsonl"}
+    private_files = {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "PRAXIS.md", "CONTEXT.md", "session.json", "transcript.txt", "transcript.json", "transcript.jsonl", "diarization.json", "diarization.rttm", "speaker-transcript.txt", "speaker-transcript.jsonl", "speaker-identities.json", "speaker-suggestions.jsonl", "speaker-suggestion-decisions.json", "enrichment.json"}
     private_suffixes = {".wav", ".caf", ".aif", ".aiff", ".m4a", ".mp3", ".flac", ".ogg", ".opus", ".mp4", ".mov", ".pem", ".key", ".p12", ".pfx", ".log"}
     return (path.is_absolute() or ".." in path.parts or bool(set(path.parts) & private_dirs)
             or path.name in private_files or path.suffix.lower() in private_suffixes
@@ -59,7 +59,8 @@ for name in files:
         failures.append(f"personal absolute path in tracked file: {name}")
 
 # Protect complete analysis runs, including files whose names are chosen by a hook.
-examples = ["teams-20261118-120000/arbitrary-notes.md", "teams-20261118-120000-2/summary.json",
+examples = ["teams-slack-2026-11-25-01/arbitrary-notes.md", "nested/teams-2026-11-25-02/summary.json",
+            "teams-20261118-120000/arbitrary-notes.md", "teams-20261118-120000-2/summary.json",
             "custom-output/hooks/01234567-89ab-cdef-0123-456789abcdef/001/notes.md",
             "custom-output/hooks/01234567-89ab-cdef-0123-456789abcdef/input.json",
             "custom-output/speaker-transcript.txt", "custom-output/diarization.json", "local.env.key"]

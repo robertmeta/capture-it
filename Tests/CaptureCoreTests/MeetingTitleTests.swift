@@ -22,7 +22,7 @@ final class MeetingTitleTests: XCTestCase {
     }
 
     func testExplicitTitleWinsWithoutNeedingAccessibility() {
-        let observer = MeetingObserver(pid: nil, appName: "unknown", title: "  Planning\nReview  ")
+        let observer = MeetingObserver(target: nil, title: "  Planning\nReview  ")
         defer { observer.stop() }
         XCTAssertEqual(observer.snapshot.title, "Planning Review")
         XCTAssertEqual(observer.snapshot.source, "explicit")

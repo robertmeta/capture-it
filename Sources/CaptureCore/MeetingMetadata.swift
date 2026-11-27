@@ -43,7 +43,7 @@ enum MeetingTitlePolicy {
 /// Reads only the selected PID's window titles on a separate bounded AX worker.
 /// A window title is evidence, not proof of a meeting subject or active speaker.
 final class MeetingObserver: @unchecked Sendable {
-    private let pid: pid_t?
+    private let target: AppChoice?
     private let appName: String
     private let lock = NSLock()
     private var value: MeetingMetadata
@@ -57,8 +57,8 @@ final class MeetingObserver: @unchecked Sendable {
         AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
     }
 
-    init(pid: pid_t?, appName: String, title: String?) {
-        self.pid = pid; self.appName = appName; explicit = title != nil
+    init(target: AppChoice?, title: String?) {
+        self.target = target; self.appName = target?.name ?? ""; explicit = title != nil
         value = title.map { MeetingMetadata(title: MeetingTitlePolicy.clean($0), source: "explicit", verified: true, status: "provided") }
             ?? MeetingMetadata(verified: false, status: Self.isTrusted ? "unknown" : "permission-required")
         timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "capture-it.meeting-title", qos: .utility))
@@ -80,7 +80,7 @@ final class MeetingObserver: @unchecked Sendable {
 
     private func read() -> MeetingMetadata {
         guard Self.isTrusted else { return MeetingMetadata(verified: false, status: "permission-required") }
-        guard let pid else { return MeetingMetadata(verified: false, status: "unavailable") }
+        guard let pid = target?.runningPID else { return MeetingMetadata(verified: false, status: "unavailable") }
         let app = AXUIElementCreateApplication(pid)
         guard AXUIElementSetMessagingTimeout(app, 0.15) == .success else {
             return MeetingMetadata(verified: false, status: "unavailable")

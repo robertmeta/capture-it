@@ -19,16 +19,17 @@ children = []
 
 
 def command(query, directory):
-    return [binary, "record", "--app", query, "--out", str(directory), "--duration", "2", "--no-transcribe"]
+    return [binary, "record", "--format", "wav", "--app", query, "--out", str(directory), "--duration", "2", "--no-transcribe"]
 
 
-def assert_capture(directory, pid):
+def assert_capture(directory, pid, filename="recording.wav"):
     saved = json.loads((directory / "session.json").read_text())
     assert saved["recording"] == "complete" and saved["app"] == "com.robertmeta.capture-it.fixture.selected", saved
     assert saved["selectedProcessID"] == pid
     assert saved["microphoneSelection"] in ("system-default", "app", "explicit")
-    assert list(directory.glob("*.wav")) == [directory / "recording.wav"]
-    with wave.open(str(directory / "recording.wav")) as audio:
+    assert saved["chunks"][0]["file"] == filename
+    assert list(directory.glob("*.wav")) == [directory / filename]
+    with wave.open(str(directory / filename)) as audio:
         assert audio.getnchannels() == 3 and audio.getnframes() > 24_000
 
 
@@ -79,18 +80,21 @@ try:
         result = subprocess.run(command(query, directory), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stderr
         assert_capture(directory, children[0])
-    # Public shorthand creates a query-dated directory in the caller's cwd.
+    # Both shorthand forms create a dated session under the selected capture home.
     work = root / "cwd"
     work.mkdir()
-    for args in (["Selected"], ["record", "*Selected*"]):
-        before = set(work.iterdir())
-        result = subprocess.run([binary, *args, "--duration", "1", "--no-transcribe"], cwd=work, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+    for args in (["Selected", "--format", "wav"], ["record", "*Selected*", "--format", "wav", "--home", str(root / "flag home")]):
+        capture_home = root / ("flag home" if "--home" in args else "env home")
+        recordings = capture_home / "recordings"
+        before = set(recordings.glob("*"))
+        result = subprocess.run([binary, *args, "--duration", "1", "--no-transcribe"], cwd=work, env=dict(os.environ, CAPTURE_IT_HOME=str(root / "env home")), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stderr
-        created = set(work.iterdir()) - before
+        assert not list(work.iterdir())
+        created = set(recordings.iterdir()) - before
         assert len(created) == 1
         output = created.pop()
-        assert re.fullmatch(r"selected-\d{8}-\d{6}(?:-\d+)?", output.name), output
-        assert_capture(output, children[0])
+        assert re.fullmatch(r"selected-\d{4}-\d{2}-\d{2}-01", output.name), output
+        assert_capture(output, children[0], output.name + ".wav")
         saved = json.loads((output / "session.json").read_text())
         assert saved["microphoneSelection"] == "system-default", saved
         assert "Microphone:" in result.stderr and "system default" in result.stderr
@@ -98,7 +102,7 @@ try:
     devices = json.loads(subprocess.check_output([binary, "devices", "--json"], text=True))
     default = next(device for device in devices if device["isDefault"])
     explicit = root / "explicit-mic"
-    result = subprocess.run([binary, "Selected", "--out", str(explicit), "--mic", default["uid"], "--duration", "1", "--no-transcribe"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+    result = subprocess.run([binary, "Selected", "--format", "wav", "--out", str(explicit), "--mic", default["uid"], "--duration", "1", "--no-transcribe"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert_capture(explicit, children[0])
     saved = json.loads((explicit / "session.json").read_text())

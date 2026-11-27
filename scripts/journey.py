@@ -17,6 +17,11 @@ def run(*args, expected=0):
 
 assert re.fullmatch(r"\d+\.\d+\.\d+", run("--version").stdout.strip())
 assert "capture-it NAME_OR_PATTERN" in run("--help").stdout
+assert "--ai-help" in run("--help").stdout
+guide = run("--ai-help").stdout
+assert "AI_GUIDANCE_VERSION=1" in guide and run("--version").stdout.strip() in guide
+assert all(token in guide for token in ["capture-it enrich", "gpt-6.2-sol", "speaker-identities.json", "CAPTURE_IT_HOOK_OUTPUT", "--no-ai", "Exit codes:", "Recovery:"])
+assert run("speakers", "--ai-help").stdout == guide
 apps = json.loads(run("apps", "--json").stdout)
 devices = json.loads(run("devices", "--json").stdout)
 assert isinstance(apps, list) and isinstance(devices, list)
@@ -37,6 +42,9 @@ with tempfile.TemporaryDirectory(prefix="capture-it-journey-") as directory:
     assert "either a positional app name or --app" in result.stderr
     result = run("invalid-capture-it-no-match", expected=1)
     assert "No running app matches" in result.stderr
+assert "--format must be" in run("record", "--format", "mp4", "--app", "unused", expected=1).stderr
+run("speakers", "missing", "--match", "--list", expected=1)
+run("speakers", "missing", "--match", "--assign", "S1", "--name", "Example", expected=1)
 run("record", "--out", "example", expected=1)
 run("apps", "--unknown", "x", expected=1)
 run("apps", "--json", "--json", expected=1)
