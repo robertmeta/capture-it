@@ -26,4 +26,24 @@ final class VoiceMatchingTests: XCTestCase {
         XCTAssertNil(VoiceMatching.match([], references: ["Joe": [a]]))
         XCTAssertEqual(VoiceMatching.match(a, references: ["Joe": [a, b]]), "Joe")
     }
+
+    func testAuditedScoresAndConservativeSampleConsensus() {
+        var a = [Float](repeating: 0, count: 256)
+        var b = a
+        a[0] = 1; b[1] = 1
+        let joe = VoiceMatching.assess(a, references: ["Joe": [a], "Alex": [b]])
+        let alex = VoiceMatching.assess(b, references: ["Joe": [a], "Alex": [b]])
+        let weak = VoiceMatching.assess(b, references: ["Joe": [a]])
+        let ambiguous = VoiceMatching.assess(a, references: ["Joe": [a], "Alex": [a]])
+        XCTAssertEqual(joe.score, 1)
+        XCTAssertEqual(joe.runnerUpScore, 0)
+        XCTAssertEqual(ambiguous.reason, "ambiguous")
+        XCTAssertEqual(weak.reason, "weak")
+        XCTAssertNil(VoiceMatching.consensus([]))
+        XCTAssertEqual(VoiceMatching.consensus([joe]), "Joe")
+        XCTAssertEqual(VoiceMatching.consensus([joe, joe, weak]), "Joe")
+        XCTAssertNil(VoiceMatching.consensus([joe, weak]))
+        XCTAssertNil(VoiceMatching.consensus([joe, joe, alex]))
+        XCTAssertNil(VoiceMatching.consensus([ambiguous, ambiguous]))
+    }
 }

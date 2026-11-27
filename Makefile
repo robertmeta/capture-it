@@ -1,4 +1,4 @@
-.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-keys test-meetings test-m4a test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed test-ai audit-public
+.PHONY: help build install setup test lint verify test-journeys test-native test-speech test-selection test-microphone test-shutdown test-keys test-meetings test-m4a test-hooks test-title build-fluid setup-fluid test-fluid test-fluid-installed test-ai test-rematch audit-public
 
 BINDIR ?= $(HOME)/bin
 # Fixture checks never invoke a configured model provider.
@@ -19,6 +19,7 @@ help:
 	@echo 'test-keys       Real terminal q, repeated q, Ctrl-C, Escape and restoration'
 	@echo 'test-m4a        Import M4A/WAV, replay and label audio with local speech and FluidAudio'
 	@echo 'test-meetings   Rotate real multi-app audio while hooks run and apps relaunch'
+	@echo 'test-rematch    Rematch existing M4A speakers from other recordings locally'
 	@echo 'test-ai         AI suggestions, review and enrollment with real local voices'
 	@echo 'test-hooks      Real capture + local hooks, failure, timeout and cancellation'
 	@echo 'test-title      Real selected-app Accessibility title, override and hook metadata'
@@ -102,6 +103,9 @@ setup-fluid: build-fluid
 	install -m 755 hooks/fluidaudio "$(BINDIR)/capture-it-fluid"
 	"$(BINDIR)/capture-it-fluid" --check
 	@echo 'FluidAudio installed. Record with capture-it teams; labels run after saving. Use --no-fluid to skip.'
+
+test-rematch: build
+	python3 scripts/rematch_journey.py .build/release/capture-it
 
 test-ai: build
 	python3 scripts/ai_journey.py .build/release/capture-it --fluid

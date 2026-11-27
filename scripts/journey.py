@@ -43,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix="capture-it-journey-") as directory:
     result = run("invalid-capture-it-no-match", expected=1)
     assert "No running app matches" in result.stderr
 assert "--format must be" in run("record", "--format", "mp4", "--app", "unused", expected=1).stderr
+run("speakers", "missing", "--match", "--list", expected=1)
+run("speakers", "missing", "--match", "--assign", "S1", "--name", "Example", expected=1)
 run("record", "--out", "example", expected=1)
 run("apps", "--unknown", "x", expected=1)
 run("apps", "--json", "--json", expected=1)

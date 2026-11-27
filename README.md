@@ -168,6 +168,7 @@ capture-it teams --no-transcribe --no-fluid --no-ai --out ./my-call
 capture-it hooks ./my-call                 # run FluidAudio and review
 capture-it speakers ./my-call              # resume an existing review
 capture-it speakers ./my-call --list        # show IDs, names and example times
+capture-it speakers ./my-call --match       # match unnamed voices from other calls locally
 capture-it speakers ./my-call --assign S1 --name "Joe Smith"
 capture-it people
 ```
@@ -176,6 +177,11 @@ The assignment updates Joe’s turns in the call’s `speaker-transcript.txt` an
 saves up to three isolated voice samples on this Mac. Future recordings with
 FluidAudio enabled automatically use remembered names when the voices match.
 Confirm Joe in another recording under the same name to add more examples.
+After growing the library, use `speakers SESSION --match` to identify unnamed
+voices in saved analyses without repeating transcription, FluidAudio detection
+or AI enrichment. It preserves existing names and leaves uncertain voices unnamed.
+Use `--run UUID/NNN` when the session has multiple analyses. Matching never enrolls
+more samples automatically.
 Names appear after saving. [Voice library and matching details](docs/fluid-audio-hook.md#remembered-voices).
 
 ### Capture home

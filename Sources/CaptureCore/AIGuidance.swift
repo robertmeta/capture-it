@@ -16,6 +16,7 @@ extension CLI {
     capture-it hooks SESSION_DIRECTORY [--transcript TRANSCRIPT_DIRECTORY] [processing options]
     capture-it enrich SESSION_DIRECTORY [--run UUID/NNN] [processing options]
     capture-it speakers SESSION_DIRECTORY [--list] [--run UUID/NNN] [--home DIRECTORY]
+    capture-it speakers SESSION_DIRECTORY --match [--run UUID/NNN] [--home DIRECTORY]
     capture-it speakers SESSION_DIRECTORY --listen SPEAKER_ID [--run UUID/NNN] [--home DIRECTORY]
     capture-it speakers SESSION_DIRECTORY --assign SPEAKER_ID --name NAME [--run UUID/NNN] [--home DIRECTORY]
     capture-it people [--home DIRECTORY]
@@ -55,6 +56,7 @@ extension CLI {
     IDENTITY/REVIEW:
     capture-it speakers SESSION [--run UUID/NNN] resumes. Known voices match locally; unmatched voices play an isolated sample. Suggestions show exact quotes+timestamps; type :accept NUMBER (:accept for sole candidate), a replacement name, :reject, Enter to skip, or :quit/Ctrl-C to stop.
     Each confirmed name saves immediately, applies throughout that analysis, and enrolls up to three isolated 2..8s voice clips+model-specific embeddings when available. Fewer than 2s isolated speech -> recording-only assignment with explanation. Confirm same name in another recording to add examples. Existing enrollment can be renamed by reassignment.
+    speakers --match rescans unnamed voices using existing turns and up to three isolated 2..8s clips, without ASR/diarization/AI. Excludes profiles tagged with this sourceSession; legacy profiles with unknown origin remain eligible. Requires similarity>=0.70, next-person separation>=0.10, strict majority agreement and no conflicting positive name across clips. Existing names/metadata remain intact; uncertain voices stay unnamed. Evidence/embeddings persist in ANALYSIS/voice-matches/UUID.json; matched identities use source=voice-match. No automatic enrollment.
     AI proposals and automatic voice matches NEVER enroll automatically. Rejections persist in the analysis's speaker-suggestion-decisions.json; skipping leaves review resumable. A mentioned name, roster entry, app title, or phrase spanning two speakers cannot alone establish voice identity. No participant-roster/live-speaker adapter is implemented.
 
     HOOK CONTRACT:

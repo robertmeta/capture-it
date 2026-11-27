@@ -21,6 +21,7 @@ public enum CLI {
 
       capture-it people                         # remembered names and sample counts
       capture-it speakers SESSION_DIRECTORY [--list] [--run UUID/NNN]
+      capture-it speakers SESSION_DIRECTORY --match [--run UUID/NNN]
       capture-it speakers SESSION_DIRECTORY --listen SPEAKER_ID
       capture-it speakers SESSION_DIRECTORY --assign SPEAKER_ID --name "Joe Smith"
 
@@ -140,22 +141,27 @@ public enum CLI {
                 try args.validate(allowed: ["--home"])
                 helperArguments = ["--people"]
             } else {
-                try args.validate(allowed: ["--home", "--run", "--list", "--listen", "--assign", "--name"], positionals: 1...1)
+                try args.validate(allowed: ["--home", "--run", "--list", "--match", "--listen", "--assign", "--name"], positionals: 1...1)
                 let assign = args.values["--assign"]
                 let listen = args.values["--listen"]
+                let matching = args.flags.contains("--match")
                 guard (assign == nil) == (args.values["--name"] == nil), assign == nil || listen == nil,
-                      assign != "", listen != "", !(args.flags.contains("--list") && (assign != nil || listen != nil)) else {
-                    throw CaptureError.message("Use --listen ID or --assign ID --name NAME")
+                      assign != "", listen != "", !(args.flags.contains("--list") && (assign != nil || listen != nil || matching)),
+                      !(matching && (assign != nil || listen != nil)) else {
+                    throw CaptureError.message("Use --list, --match, --listen ID or --assign ID --name NAME separately")
                 }
-                if assign == nil, listen == nil, !args.flags.contains("--list"), HookRunner.foregroundTerminal {
+                if assign == nil, listen == nil, !args.flags.contains("--list"), !matching, HookRunner.foregroundTerminal {
                     // Keep the parent alive when Ctrl-C ends the foreground dialogue.
                     let stop = StopSignal()
                     defer { withExtendedLifetime(stop) {} }
                     try HookRunner.review(session: URL(fileURLWithPath: args.positionals[0]), run: args.values["--run"] ?? "", home: home)
                     return 0
                 }
-                helperArguments = ["--speakers", args.positionals[0], args.values["--run"] ?? "",
-                                   assign ?? listen ?? ""] + (args.values["--name"].map { [$0] } ?? [])
+                if matching { helperArguments = ["--match", args.positionals[0], args.values["--run"] ?? ""] }
+                else {
+                    helperArguments = ["--speakers", args.positionals[0], args.values["--run"] ?? "",
+                                       assign ?? listen ?? ""] + (args.values["--name"].map { [$0] } ?? [])
+                }
             }
             guard let helper = InstalledHooks.fluid() else {
                 throw CaptureError.message("Speaker review needs the installed capture-it-fluid helper. Run make setup.")
@@ -249,7 +255,7 @@ private struct Arguments {
                     hooks.append(arguments[index]); index += 1; continue
                 }
                 guard values[value] == nil, !flags.contains(value) else { throw CaptureError.message("Repeated option \(value)") }
-                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" || value == "--list" || value == "--no-review" || value == "--no-ai" { flags.insert(value) }
+                if value == "--json" || value == "--no-transcribe" || value == "--no-fluid" || value == "--list" || value == "--match" || value == "--no-review" || value == "--no-ai" { flags.insert(value) }
                 else {
                     index += 1
                     guard index < arguments.count, !arguments[index].hasPrefix("--") else { throw CaptureError.message("Missing value for \(value)") }

@@ -39,6 +39,14 @@ public func voiceExamples(_ turns: [SpeakerTurn], minimumDuration: Double = 2) -
 
 /// Compare only compatible model embeddings and require separation from other people.
 public enum VoiceMatching {
+    /// A local similarity decision, including the strongest alternative for audit.
+    public struct Assessment: Codable, Sendable {
+        public let name: String?
+        public let candidate: String?
+        public let score: Float?
+        public let runnerUpScore: Float?
+        public let reason: String
+    }
     public static func normalized(_ vector: [Float]) -> [Float]? {
         guard vector.count == 256 else { return nil }
         let length = sqrt(vector.reduce(0.0) { $0 + Double($1) * Double($1) })
@@ -48,15 +56,33 @@ public enum VoiceMatching {
 
     /// References must be unit vectors returned by normalized(_:).
     public static func match(_ embedding: [Float], references: [String: [[Float]]]) -> String? {
-        guard let query = normalized(embedding) else { return nil }
+        assess(embedding, references: references).name
+    }
+
+    /// Require the existing 0.70 similarity and 0.10 separation between people.
+    public static func assess(_ embedding: [Float], references: [String: [[Float]]]) -> Assessment {
+        guard let query = normalized(embedding) else {
+            return Assessment(name: nil, candidate: nil, score: nil, runnerUpScore: nil, reason: "invalid-embedding")
+        }
         let ranked = references.compactMap { name, examples -> (name: String, score: Float)? in
             let score = examples.filter { $0.count == query.count }.map { example in
                 zip(query, example).reduce(Float(0)) { $0 + $1.0 * $1.1 }
             }.max()
             return score.map { (name, $0) }
-        }.sorted { $0.score > $1.score }
-        guard let best = ranked.first, best.score >= 0.70,
-              ranked.count == 1 || best.score - ranked[1].score >= 0.10 else { return nil }
-        return best.name
+        }.sorted { $0.score == $1.score ? $0.name < $1.name : $0.score > $1.score }
+        guard let best = ranked.first else {
+            return Assessment(name: nil, candidate: nil, score: nil, runnerUpScore: nil, reason: "no-references")
+        }
+        let next = ranked.dropFirst().first?.score
+        let reason = best.score < 0.70 ? "weak" : (next.map { best.score - $0 < 0.10 } == true ? "ambiguous" : "matched")
+        return Assessment(name: reason == "matched" ? best.name : nil, candidate: best.name,
+                          score: best.score, runnerUpScore: next, reason: reason)
+    }
+
+    /// A strict majority must agree, with no positively matched conflicting name.
+    public static func consensus(_ samples: [Assessment]) -> String? {
+        let names = samples.compactMap(\.name)
+        guard let name = names.first, Set(names).count == 1, names.count > samples.count / 2 else { return nil }
+        return name
     }
 }

@@ -78,7 +78,8 @@ private final class AutoreleaseModel: MLModel, @unchecked Sendable {
         let arguments = Array(CommandLine.arguments.dropFirst())
         let reviewing = arguments.first == "--speakers" && (4...5).contains(arguments.count)
         let dialogue = arguments.first == "--review" && arguments.count == 3
-        guard arguments.count == 1 || reviewing || dialogue else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
+        let matching = arguments.first == "--match" && arguments.count == 3
+        guard arguments.count == 1 || reviewing || dialogue || matching else { throw HookFailure("Usage: hooks/fluidaudio EVENT_JSON, or --check. Run make setup-fluid for initial installation.") }
         if arguments[0] == "--help" {
             print("Offline FluidAudio hook: EVENT_JSON → diarization.json and optional speaker-transcript.jsonl/.txt. --check validates installed models. No runtime downloads.")
             return
@@ -91,9 +92,9 @@ private final class AutoreleaseModel: MLModel, @unchecked Sendable {
             return
         }
         let directory = modelDirectory()
-        if reviewing || dialogue {
+        if reviewing || dialogue || matching {
             let completed = try await SpeakerReview.review(session: URL(fileURLWithPath: arguments[1]), run: arguments[2],
-                                           interactive: dialogue, speaker: dialogue ? "" : arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
+                                           interactive: dialogue, matching: matching, speaker: dialogue || matching ? "" : arguments[3], name: arguments.count == 5 ? arguments[4] : nil,
                                            revision: spec.revision) {
                 _ = try verifyModels(directory: directory, spec: spec)
                 let manager = OfflineDiarizerManager()

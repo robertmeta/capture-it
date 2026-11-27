@@ -197,3 +197,26 @@ analysis. The helper reads the session manifest to find its saved audio.
 Model output tensors are copied into owned CPU buffers between inference calls.
 This keeps long imports from retaining Core ML surfaces through feature accessors.
 Prediction counters are available in the helper’s debug logs.
+
+## Rematch saved speakers
+
+After adding people to the library, run `capture-it speakers SESSION --match`
+(or add `--run UUID/NNN`) to identify the remaining unnamed voices locally.
+The helper reuses saved turns, extracts up to three isolated 2–8 second clips,
+and compares their embeddings to remembered people. It does not rerun ASR,
+full diarization or AI. Existing identities and their extension metadata remain
+intact, and automatic matches do not add reference samples.
+
+Profiles record `sourceSession` when enrolled. Rematching excludes profiles from
+the target session so its new names are supported by other recordings. Legacy
+profiles without origin metadata remain eligible. Per-clip similarity must reach
+0.70 with a 0.10 margin over another person. A strict majority of the clips must
+agree and no positively matched clip may name someone else. Ambiguous aliases,
+weak evidence, conflicting clips and short voices remain unnamed.
+
+Each invocation writes a private `ANALYSIS/voice-matches/UUID.json` report with
+completion state, source/model/library metadata, excluded session, per-speaker
+status, clip intervals, query embeddings and similarity assessments. Names save
+immediately as `source: voice-match` and regenerate the full derived text. Repeat
+matching skips existing names. `make test-rematch` verifies this journey with real
+local synthetic voices and a deterministic AI boundary; it makes no provider call.

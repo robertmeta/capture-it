@@ -15,13 +15,14 @@ private struct Enrollment: Codable {
     var name: String
     let revision: String
     let embeddings: [[Float]]
+    var sourceSession: String? = nil
 }
 
 enum SpeakerReview {
     private static var files: FileManager { .default }
     private static var library: URL { CaptureHome().voices }
 
-    static func references(revision: String) throws -> [String: [[Float]]] {
+    static func references(revision: String, excluding session: URL? = nil) throws -> [String: [[Float]]] {
         var people: [String: [[Float]]] = [:]
         let entries: [URL]
         do { entries = try files.contentsOfDirectory(at: library, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) }
@@ -29,6 +30,8 @@ enum SpeakerReview {
         for entry in entries where entry.pathExtension == "voice" {
             let data = try Data(contentsOf: entry.appendingPathComponent("profile.json"))
             let profile = try JSONDecoder().decode(Enrollment.self, from: data)
+            if let session, let source = profile.sourceSession,
+               URL(fileURLWithPath: source).standardizedFileURL.resolvingSymlinksInPath() == session.standardizedFileURL.resolvingSymlinksInPath() { continue }
             if profile.revision == revision {
                 people[profile.name, default: []] += profile.embeddings.compactMap(VoiceMatching.normalized)
             }
@@ -68,21 +71,28 @@ enum SpeakerReview {
         return try JSONDecoder().decode([String: Identity].self, from: Data(contentsOf: url))
     }
 
-    static func review(session: URL, run: String, interactive: Bool, speaker: String, name: String?, revision: String,
+    static func review(session: URL, run: String, interactive: Bool, matching: Bool = false, speaker: String, name: String?, revision: String,
                        makeManager: () throws -> OfflineDiarizerManager) async throws -> Bool {
         let output = try select(session: session, run: run)
         let report = try JSONDecoder().decode(Report.self, from: Data(contentsOf: output.appendingPathComponent("diarization.json")))
         guard report.version == 1 else { throw HookFailure("Unsupported diarization report version") }
         let examples = voiceExamples(report.turns, minimumDuration: 0.05)
-        let suggestions = try SuggestionReview.load(session: session, output: output, speakers: report.speakers)
         struct SessionFiles: Decodable {
-            struct Chunk: Decodable { let file: String }
+            struct Chunk: Decodable { let file: String; let frames: Int64? }
             let chunks: [Chunk]
         }
         let saved = try JSONDecoder().decode(SessionFiles.self, from: Data(contentsOf: session.appendingPathComponent("session.json")))
         guard saved.chunks.count == 1, let file = saved.chunks.first?.file, ["wav", "m4a", "mp3", "aif", "aiff", "caf"].contains(URL(fileURLWithPath: file).pathExtension.lowercased()),
               URL(fileURLWithPath: file).lastPathComponent == file else { throw HookFailure("Expected one session audio filename") }
         let wav = session.appendingPathComponent(file)
+        if matching {
+            let audio = try AVAudioFile(forReading: wav)
+            if let frames = saved.chunks.first?.frames, audio.length != frames { throw HookFailure("Saved audio frame count differs from session metadata") }
+            try await rematch(session: session, output: output, wav: wav, speakers: report.speakers, turns: report.turns,
+                              revision: revision, makeManager: makeManager)
+            return true
+        }
+        let suggestions = try SuggestionReview.load(session: session, output: output, speakers: report.speakers)
         if interactive {
             let terminal = try SpeakerTerminal()
             let matched = try identities(in: output)
@@ -169,22 +179,29 @@ enum SpeakerReview {
         print(enrollmentSpans.isEmpty ? "Assigned in this recording only. Enrollment needs two seconds of isolated speech." : "Voice samples: \(destination.path)")
     }
 
-    private static func saveMatch(_ name: String, speaker: String, output: URL) throws {
+    @discardableResult static func saveMatch(_ name: String, speaker: String, output: URL) throws -> Bool {
         let fd = open(output.path, O_RDONLY)
         guard fd >= 0 else { throw HookFailure("Cannot open speaker analysis directory") }
         defer { close(fd) }
         guard flock(fd, LOCK_EX) == 0 else { throw HookFailure("Cannot lock speaker analysis") }
-        try writeIdentity(Identity(name: name, source: "voice-match"), speaker: speaker, output: output)
+        return try writeIdentity(Identity(name: name, source: "voice-match"), speaker: speaker, output: output)
     }
 
     // The caller holds the analysis directory lock while updating both projections.
-    private static func writeIdentity(_ identity: Identity, speaker: String, output: URL) throws {
+    @discardableResult private static func writeIdentity(_ identity: Identity, speaker: String, output: URL) throws -> Bool {
         var labels = try identities(in: output)
-        if identity.source == "voice-match", labels[speaker] != nil { return }
+        if identity.source == "voice-match", labels[speaker] != nil { return false }
         labels[speaker] = identity
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(labels).write(to: output.appendingPathComponent("speaker-identities.json"), options: .atomic)
+        let identitiesURL = output.appendingPathComponent("speaker-identities.json")
+        var preserved: [String: Any] = [:]
+        if files.fileExists(atPath: identitiesURL.path) {
+            guard let existing = try JSONSerialization.jsonObject(with: Data(contentsOf: identitiesURL)) as? [String: Any] else {
+                throw HookFailure("Invalid speaker identity map")
+            }
+            preserved = existing
+        }
+        preserved[speaker] = ["name": identity.name, "source": identity.source]
+        try JSONSerialization.data(withJSONObject: preserved, options: [.prettyPrinted, .sortedKeys]).write(to: identitiesURL, options: .atomic)
         let jsonl = output.appendingPathComponent("speaker-transcript.jsonl")
         if files.fileExists(atPath: jsonl.path) {
             let names = labels.mapValues(\.name)
@@ -199,9 +216,10 @@ enum SpeakerReview {
             }
             try Data(text.utf8).write(to: output.appendingPathComponent("speaker-transcript.txt"), options: .atomic)
         }
+        return true
     }
 
-    private static func embedding(_ clip: URL, manager: OfflineDiarizerManager) async throws -> [Float]? {
+    static func embedding(_ clip: URL, manager: OfflineDiarizerManager) async throws -> [Float]? {
         let (source, _) = try AudioSourceFactory().makeDiskBackedSource(from: clip, targetSampleRate: 16_000)
         defer { source.cleanup() }
         let seconds = Double(source.sampleCount) / 16_000
@@ -226,6 +244,7 @@ enum SpeakerReview {
             var profile = try JSONDecoder().decode(Enrollment.self, from: Data(contentsOf: profileURL))
             if profile.revision == revision {
                 profile.name = name
+                if profile.sourceSession == nil { profile.sourceSession = wav.deletingLastPathComponent().standardizedFileURL.path }
                 try JSONEncoder().encode(profile).write(to: profileURL, options: .atomic)
                 return
             }
@@ -243,7 +262,7 @@ enum SpeakerReview {
             guard let vector = try await embedding(clip, manager: manager) else { throw HookFailure("Voice sample has no usable embedding") }
             vectors.append(vector)
         }
-        try writeJSON(Enrollment(name: name, revision: revision, embeddings: vectors), to: staging.appendingPathComponent("profile.json"))
+        try writeJSON(Enrollment(name: name, revision: revision, embeddings: vectors, sourceSession: wav.deletingLastPathComponent().standardizedFileURL.path), to: staging.appendingPathComponent("profile.json"))
         try files.moveItem(at: staging, to: destination)
     }
 }
